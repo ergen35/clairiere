@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install what Electron needs to run without a screen
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb libgtk-3-0t64 libnss3 libgbm1 libasound2t64 libglib2.0-bin
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Build the app and the installable package
+        run: npm run package
+
+      # Runs on a throw-away home folder, with stand-ins for the system commands.
+      - name: End-to-end checks
+        run: xvfb-run -a npm run test:e2e
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: clairiere-deb
+          path: release/*.deb
+          if-no-files-found: error

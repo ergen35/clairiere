@@ -1,5 +1,9 @@
 # Historique des versions
 
+## À venir
+
+- Intégration continue : compilation, essais et paquet `.deb` à chaque envoi sur GitHub.
+
 ## 0.2.0
 
 - Crédits de l'auteur et liens vers GitHub dans une fenêtre « À propos ».
