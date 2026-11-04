@@ -1,0 +1,4 @@
+#!/bin/sh
+# Starts Clairière from its folder.
+here="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+exec "$here/node_modules/electron/dist/electron" "$here" "$@"

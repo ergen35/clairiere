@@ -1,0 +1,8 @@
+node_modules
+dist
+dist-electron
+engine/target
+engine-bin
+shots
+release
+.impeccable
