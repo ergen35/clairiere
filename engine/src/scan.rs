@@ -118,24 +118,56 @@ pub struct Mounts {
     root_source: String,
 }
 
+/// Linux: what the kernel lists in /proc/self/mountinfo.
+#[cfg(target_os = "linux")]
+fn mount_table() -> Vec<(PathBuf, String)> {
+    let mut list = Vec::new();
+    if let Ok(text) = fs::read_to_string("/proc/self/mountinfo") {
+        for line in text.lines() {
+            let mut parts = line.split(" - ");
+            let (Some(a), Some(b)) = (parts.next(), parts.next()) else {
+                continue;
+            };
+            let Some(mp) = a.split(' ').nth(4) else {
+                continue;
+            };
+            let Some(source) = b.split(' ').nth(1) else {
+                continue;
+            };
+            list.push((PathBuf::from(unescape(mp)), source.to_string()));
+        }
+    }
+    list
+}
+
+/// macOS: "/dev/disk3s5 on /System/Volumes/Data (apfs, local, journaled)", as `mount` prints it.
+#[cfg(target_os = "macos")]
+fn mount_table() -> Vec<(PathBuf, String)> {
+    let mut list = Vec::new();
+    let Ok(out) = std::process::Command::new("/sbin/mount").output() else {
+        return list;
+    };
+    for line in String::from_utf8_lossy(&out.stdout).lines() {
+        let Some((source, rest)) = line.split_once(" on ") else {
+            continue;
+        };
+        let Some(end) = rest.rfind(" (") else {
+            continue;
+        };
+        list.push((PathBuf::from(&rest[..end]), source.to_string()));
+    }
+    list
+}
+
+/// Windows: mounted folders are links, which a walk never follows anyway.
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn mount_table() -> Vec<(PathBuf, String)> {
+    Vec::new()
+}
+
 impl Mounts {
     pub fn read(root: &Path) -> Mounts {
-        let mut list = Vec::new();
-        if let Ok(text) = fs::read_to_string("/proc/self/mountinfo") {
-            for line in text.lines() {
-                let mut parts = line.split(" - ");
-                let (Some(a), Some(b)) = (parts.next(), parts.next()) else {
-                    continue;
-                };
-                let Some(mp) = a.split(' ').nth(4) else {
-                    continue;
-                };
-                let Some(source) = b.split(' ').nth(1) else {
-                    continue;
-                };
-                list.push((PathBuf::from(unescape(mp)), source.to_string()));
-            }
-        }
+        let list = mount_table();
         let root_source = list
             .iter()
             .filter(|(mp, _)| root.starts_with(mp))
@@ -155,6 +187,7 @@ impl Mounts {
     }
 }
 
+#[cfg(target_os = "linux")]
 fn unescape(s: &str) -> String {
     let bytes = s.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
@@ -186,9 +219,9 @@ struct WorkerOut {
 }
 
 pub fn walk(root: &Path, cancel: &AtomicBool, progress: &Progress, collect: bool) -> Result<Tree, String> {
-    let md = fs::symlink_metadata(root).map_err(|e| format!("{e}"))?;
+    let md = fs::symlink_metadata(root).map_err(|_| String::from("not_found"))?;
     if !md.is_dir() {
-        return Err("Ce chemin n'est pas un dossier.".into());
+        return Err("not_a_folder".into());
     }
     let workers = thread_count();
     let shared = Shared {

@@ -1,0 +1,49 @@
+# Installers for Windows (.exe) and macOS (.dmg). The Linux .deb is made by scripts/package-deb.mjs.
+# Not signed for now: Windows SmartScreen and macOS Gatekeeper ask for a confirmation the first time.
+appId: io.github.ergen35.clairiere
+productName: Clairière
+copyright: Copyright © 2026 Serge Eric Hotegni
+directories:
+  output: release
+  buildResources: public
+# The engine is a program of its own: it must stay a plain file, outside any archive.
+asar: false
+npmRebuild: false
+files:
+  - dist/**
+  - dist-electron/**
+  - engine-bin/**
+  - package.json
+  - "!**/*.map"
+
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+  icon: public/icon-1024.png
+  artifactName: Clairiere-${version}-Windows-${arch}-Setup.${ext}
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: Clairière
+
+mac:
+  target:
+    - target: dmg
+  category: public.app-category.utilities
+  icon: public/icon-1024.png
+  # "-" is an ad-hoc signature: no certificate, but enough for Apple Silicon Macs to run it.
+  identity: "-"
+  hardenedRuntime: false
+  artifactName: Clairiere-${version}-macOS-${arch}.${ext}
+  extendInfo:
+    NSDesktopFolderUsageDescription: Clairière measures the folders on your disks to show what takes space.
+    NSDocumentsFolderUsageDescription: Clairière measures the folders on your disks to show what takes space.
+    NSDownloadsFolderUsageDescription: Clairière measures the folders on your disks to show what takes space.
+    NSRemovableVolumesUsageDescription: Clairière measures the folders on your disks to show what takes space.
+    NSAppleEventsUsageDescription: Clairière asks the Finder to empty the Trash when you choose to.
+dmg:
+  title: Clairière ${version}

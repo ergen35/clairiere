@@ -60,7 +60,7 @@ body,
 body {
   background: var(--bg);
   color: var(--ink);
-  font: 13.5px/1.45 Inter, Cantarell, Ubuntu, 'Noto Sans', system-ui, sans-serif;
+  font: 13.5px/1.45 Inter, 'Segoe UI', -apple-system, BlinkMacSystemFont, Cantarell, Ubuntu, 'Noto Sans', system-ui, 'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC', 'Apple SD Gothic Neo', 'Malgun Gothic', 'Noto Sans CJK KR', sans-serif;
   overflow: hidden;
   -webkit-font-smoothing: antialiased;
 }
@@ -395,7 +395,29 @@ input[type='checkbox'] {
 }
 
 .scan-figures dt { color: var(--ink-3); font-size: 12px; }
-.scan-figures dd { margin: 2px 0 0; font-size: 19px; font-weight: 600; letter-spacing: -0.01em; white-space: nowrap; }
+.scan-figures dd { margin: 2px 0 0; font-size: 19px; line-height: 1.2em; font-weight: 600; letter-spacing: -0.01em; white-space: nowrap; }
+
+/* Odometer: each digit is a drum that turns to its next value instead of flashing. */
+.rolling { display: inline-flex; align-items: flex-start; height: 1.2em; overflow: hidden; }
+.rolling-char { white-space: pre; }
+/* Digits fade at the top and bottom edges, like the curve of a turning cylinder. */
+.wheel {
+  display: inline-block;
+  height: 1.2em;
+  overflow: hidden;
+  mask-image: linear-gradient(to bottom, transparent 0, #000 16%, #000 84%, transparent 100%);
+}
+.wheel-strip {
+  display: flex;
+  flex-direction: column;
+  transition: transform 0.42s cubic-bezier(0.22, 0.8, 0.3, 1);
+  will-change: transform;
+}
+.wheel-strip > span { display: block; height: 1.2em; line-height: 1.2em; text-align: center; }
+
+@media (prefers-reduced-motion: reduce) {
+  .wheel-strip { transition: none; }
+}
 
 .scan-top {
   display: flex;
@@ -883,4 +905,73 @@ input[type='checkbox'] {
 @media (prefers-reduced-motion: reduce) {
   .pulse { animation: none; background: var(--sun); opacity: 0.5; }
   .bar > span, .twist { transition: none; }
+}
+
+/* ---------- Language ---------- */
+.side-lang {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: -6px;
+  padding: 5px 6px;
+  border: 0;
+  border-radius: 5px;
+  background: none;
+  color: var(--ink-2);
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.side-lang:hover { background: var(--hover); color: var(--ink); }
+.side-lang + .side-about { margin-top: -14px; }
+
+.lang-back.first { background: color-mix(in srgb, var(--bg) 82%, transparent); backdrop-filter: blur(6px); }
+.lang-card { width: min(520px, 100%); gap: 18px; padding: 24px; }
+.lang-head { display: flex; align-items: center; gap: 14px; }
+.lang-head > div { display: flex; flex-direction: column; gap: 2px; }
+.lang-head h2 { font-size: 19px; }
+
+.lang-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.lang-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  height: 44px;
+  padding: 0 14px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--raised);
+  color: var(--ink-2);
+  font-size: 14.5px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.lang-option:hover { border-color: var(--line-strong); color: var(--ink); }
+.lang-option.on {
+  border-color: var(--sun);
+  background: color-mix(in srgb, var(--sun) 12%, var(--raised));
+  color: var(--ink);
+  font-weight: 600;
+}
+.lang-option.on .icon { color: var(--sun-text); }
+.lang-option:first-child { grid-column: 1 / -1; }
+
+.ex-hint {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 11px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--ink-2);
+  font-size: 12.5px;
 }

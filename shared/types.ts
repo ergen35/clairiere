@@ -1,4 +1,5 @@
 // Everything the window and the desktop side exchange.
+import type { Lang } from './i18n';
 
 export interface DiskInfo {
   id: string;
@@ -157,8 +158,16 @@ export interface CleanStats {
   autoClean: boolean;
 }
 
+export type Platform = 'linux' | 'darwin' | 'win32';
+
 export interface Api {
   isDemo: boolean;
+  platform(): Promise<Platform>;
+  /** The language chosen by the person, or null before the first choice. */
+  getLanguage(): Promise<Lang | null>;
+  setLanguage(lang: Lang): Promise<void>;
+  /** macOS: the Privacy settings page where full disk access is granted. */
+  openDiskAccessSettings(): Promise<void>;
   home(): Promise<string>;
   disks(): Promise<DiskInfo[]>;
   scan(path: string, onProgress: (p: ScanProgress) => void): Promise<ScanResult>;

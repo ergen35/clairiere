@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { DeleteOutcome, DiskInfo, ScanProgress, ScanResult } from '../shared/types';
+import { LANGUAGES } from '../shared/i18n';
+import type { DeleteOutcome, DiskInfo, Platform, ScanProgress, ScanResult } from '../shared/types';
 import { About } from './About';
 import { api } from './api';
 import { Clean, useCleaning } from './Clean';
 import { Explorer } from './Explorer';
-import { formatBytes, plural } from './format';
+import { formatBytes } from './format';
 import { Home } from './Home';
+import { t, tn, useLang } from './i18n';
 import { ScanProgressView } from './ScanProgressView';
 import { Bar, Icon, usageTone } from './ui';
 
@@ -16,7 +18,9 @@ interface Toast {
   text: string;
 }
 
-export function App() {
+export function App({ onChangeLanguage }: { onChangeLanguage(): void }) {
+  const lang = useLang();
+  const [platform, setPlatform] = useState<Platform>('linux');
   const [page, setPage] = useState<Page>('home');
   const [disks, setDisks] = useState<DiskInfo[]>([]);
   const [home, setHome] = useState('');
@@ -44,9 +48,23 @@ export function App() {
   useEffect(() => {
     refreshDisks();
     void api.home().then(setHome);
+    void api.platform().then(setPlatform);
     const timer = setInterval(refreshDisks, 15_000);
     return () => clearInterval(timer);
   }, [refreshDisks]);
+
+  // Disk names and clean-up labels come from the desktop side, in the language it was told.
+  const firstLang = useRef(true);
+  useEffect(() => {
+    if (firstLang.current) {
+      firstLang.current = false;
+      return;
+    }
+    refreshDisks();
+    void cleaning.refresh();
+    // Only when the language changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lang]);
 
   const latestScan = useRef(0);
 
@@ -86,7 +104,7 @@ export function App() {
       if (why) {
         say(why);
       } else {
-        say('Ajouté à vos emplacements à vider.');
+        say(t('toast.addedRegular'));
         void cleaning.refresh();
       }
     });
@@ -120,30 +138,34 @@ export function App() {
           <img src="./icon.svg" alt="" width={26} height={26} />
           <strong>Clairière</strong>
         </div>
-        <nav aria-label="Principale">
-          {nav('home', 'disk', 'Disques')}
-          {nav('map', 'map', 'Carte', !result && !scanning, scanning ? '…' : undefined)}
-          {nav('clean', 'clean', 'Nettoyage', false, reclaim ? formatBytes(reclaim) : undefined)}
+        <nav aria-label={t('nav.main')}>
+          {nav('home', 'disk', t('nav.disks'))}
+          {nav('map', 'map', t('nav.map'), !result && !scanning, scanning ? '…' : undefined)}
+          {nav('clean', 'clean', t('nav.clean'), false, reclaim ? formatBytes(reclaim) : undefined)}
         </nav>
         <span className="spacer" />
         {system && (
           <div className="side-disk">
             <div className="side-disk-line">
               <span>{system.label}</span>
-              <strong className="num">{formatBytes(system.free)} libres</strong>
+              <strong className="num">{t('side.free', { size: formatBytes(system.free) })}</strong>
             </div>
             <Bar value={system.used / system.total} tone={usageTone(system.used, system.total)} />
           </div>
         )}
+        <button className="side-lang" onClick={onChangeLanguage} aria-label={`${t('lang.button')}: ${LANGUAGES.find((l) => l.code === lang)?.name}`}>
+          <Icon name="globe" size={16} />
+          <span>{LANGUAGES.find((l) => l.code === lang)?.name}</span>
+        </button>
         <button className="side-about" onClick={() => setShowAbout(true)}>
-          À propos <span className="num">v{__APP_VERSION__}</span>
+          {t('side.about')} <span className="num">v{__APP_VERSION__}</span>
         </button>
       </aside>
 
       <main className="main">
         {api.isDemo && (
           <div className="demo-banner">
-            <Icon name="warn" /> Aperçu avec des données d'exemple : un navigateur ne peut pas lire vos disques. La version bureau analyse et libère vraiment.
+            <Icon name="warn" /> {t('demo.banner')}
           </div>
         )}
         <div className={page === 'home' ? 'view' : 'view hidden'}>
@@ -166,6 +188,7 @@ export function App() {
               <Explorer
                 result={result}
                 home={home}
+                platform={platform}
                 onSummary={onDeleteSummary}
                 onRescan={() => void startScan(result.root)}
                 onAddRegular={addRegular}
@@ -188,7 +211,7 @@ export function App() {
           <div key={t.id} className="toast">{t.text}</div>
         ))}
       </div>
-      <span className="sr-only">{result ? plural(result.files, 'fichier analysé', 'fichiers analysés') : ''}</span>
+      <span className="sr-only">{result ? tn('sr.filesAnalysed', result.files) : ''}</span>
     </div>
   );
 }

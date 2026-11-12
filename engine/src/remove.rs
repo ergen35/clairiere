@@ -6,13 +6,16 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering::Relaxed};
 use std::sync::Mutex;
 
+use serde_json::{json, Value};
+
 const MAX_ERRORS: usize = 20;
 
 pub struct Ctx<'a> {
     pub freed: AtomicU64,
     pub removed: AtomicU64,
     pub errors: AtomicU64,
-    pub messages: Mutex<Vec<String>>,
+    /// {path, why}: why is a short code the app turns into a sentence.
+    pub messages: Mutex<Vec<Value>>,
     pub cancel: &'a AtomicBool,
 }
 
@@ -31,31 +34,75 @@ impl<'a> Ctx<'a> {
         self.errors.fetch_add(1, Relaxed);
         let mut m = self.messages.lock().unwrap();
         if m.len() < MAX_ERRORS {
-            m.push(format!("{} : {}", path.display(), why));
+            m.push(json!({"path": path.to_string_lossy(), "why": why}));
         }
     }
 }
 
-fn make_writable(path: &Path) -> bool {
+/// Lets a folder be listed again (Unix: its own permissions).
+#[cfg(unix)]
+fn unlock_listing(path: &Path) -> bool {
     use std::os::unix::fs::PermissionsExt;
     fs::set_permissions(path, fs::Permissions::from_mode(0o700)).is_ok()
 }
+#[cfg(not(unix))]
+fn unlock_listing(_: &Path) -> bool {
+    false
+}
+
+/// Lets `path` itself be removed. Package managers often leave read-only things behind: on Unix
+/// the folder holding it must be writable, on Windows the file must lose its read-only mark.
+#[cfg(unix)]
+fn unlock_removal(path: &Path) -> bool {
+    path.parent().is_some_and(unlock_listing)
+}
+#[cfg(not(unix))]
+fn unlock_removal(path: &Path) -> bool {
+    let Ok(md) = fs::symlink_metadata(path) else {
+        return false;
+    };
+    let mut perms = md.permissions();
+    if !perms.readonly() {
+        return false;
+    }
+    #[allow(clippy::permissions_set_readonly_false)]
+    perms.set_readonly(false);
+    fs::set_permissions(path, perms).is_ok()
+}
 
 fn why(e: &std::io::Error) -> &'static str {
+    // 32 and 33 on Windows, EBUSY and ETXTBSY on Unix: another program holds the file open.
+    #[cfg(windows)]
+    let busy = matches!(e.raw_os_error(), Some(32) | Some(33));
+    #[cfg(not(windows))]
+    let busy = matches!(e.raw_os_error(), Some(16) | Some(26));
+    if busy {
+        return "in_use";
+    }
     match e.kind() {
-        ErrorKind::PermissionDenied => "accès refusé",
-        ErrorKind::NotFound => "déjà absent",
-        _ => "suppression impossible",
+        ErrorKind::PermissionDenied => "denied",
+        ErrorKind::NotFound => "gone",
+        _ => "failed",
     }
 }
 
+/// Windows removes a link to a folder (or a junction) as a folder: the link goes, its target stays.
+#[cfg(windows)]
+fn remove_link_to_dir(path: &Path, res: std::io::Result<()>) -> std::io::Result<()> {
+    match res {
+        Err(_) if fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink()) => fs::remove_dir(path),
+        other => other,
+    }
+}
+#[cfg(not(windows))]
+fn remove_link_to_dir(_: &Path, res: std::io::Result<()>) -> std::io::Result<()> {
+    res
+}
+
 fn remove_file(path: &Path, size: u64, ctx: &Ctx) {
-    let mut res = fs::remove_file(path);
-    if matches!(&res, Err(e) if e.kind() == ErrorKind::PermissionDenied) {
-        // Package managers often leave read-only folders behind: unlocking one is all it takes.
-        if path.parent().is_some_and(make_writable) {
-            res = fs::remove_file(path);
-        }
+    let mut res = remove_link_to_dir(path, fs::remove_file(path));
+    if matches!(&res, Err(e) if e.kind() == ErrorKind::PermissionDenied) && unlock_removal(path) {
+        res = remove_link_to_dir(path, fs::remove_file(path));
     }
     match res {
         Ok(()) => {
@@ -69,7 +116,7 @@ fn remove_file(path: &Path, size: u64, ctx: &Ctx) {
 
 fn list(path: &Path, ctx: &Ctx) -> Option<Vec<fs::DirEntry>> {
     let mut rd = fs::read_dir(path);
-    if matches!(&rd, Err(e) if e.kind() == ErrorKind::PermissionDenied) && make_writable(path) {
+    if matches!(&rd, Err(e) if e.kind() == ErrorKind::PermissionDenied) && unlock_listing(path) {
         rd = fs::read_dir(path);
     }
     match rd {
@@ -100,10 +147,8 @@ fn remove_dir_tree(path: &Path, dev: u64, self_bytes: u64, ctx: &Ctx) {
 
 fn remove_empty_dir(path: &Path, self_bytes: u64, ctx: &Ctx) {
     let mut res = fs::remove_dir(path);
-    if matches!(&res, Err(e) if e.kind() == ErrorKind::PermissionDenied) {
-        if path.parent().is_some_and(make_writable) {
-            res = fs::remove_dir(path);
-        }
+    if matches!(&res, Err(e) if e.kind() == ErrorKind::PermissionDenied) && unlock_removal(path) {
+        res = fs::remove_dir(path);
     }
     match res {
         Ok(()) => {
@@ -127,7 +172,7 @@ fn remove_entry(ent: &fs::DirEntry, dev: u64, ctx: &Ctx) {
     };
     if md.is_dir() {
         if meta::dev(&md) != dev {
-            ctx.fail(&path, "autre disque monté ici, laissé en place");
+            ctx.fail(&path, "other_disk");
             return;
         }
         remove_dir_tree(&path, dev, meta::alloc(&md), ctx);
@@ -166,7 +211,7 @@ pub fn remove(root: &Path, keep_root: bool, ctx: &Ctx) {
             continue;
         };
         if meta::dev(&child_md) != dev {
-            ctx.fail(&ent.path(), "autre disque monté ici, laissé en place");
+            ctx.fail(&ent.path(), "other_disk");
             continue;
         }
         let p = ent.path();

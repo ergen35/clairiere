@@ -1,18 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Artefact, CleanOutcome, CleanProgress, CleanStats, CleanTarget, DeleteItem, DeleteOutcome, TargetGroup } from '../shared/types';
 import { api } from './api';
-import { ARTEFACT_LABEL } from './Explorer';
-import { baseName, formatAge, formatBytes, formatDuration, parentPath, plural, shortPath } from './format';
+import { artefactLabel } from './Explorer';
+import { baseName, formatAge, formatBytes, formatDuration, parentPath, shortPath } from './format';
+import { t, tn } from './i18n';
 import { Bar, ConfirmDelete, Icon, Modal } from './ui';
 
-const GROUPS: { id: TargetGroup; title: string }[] = [
-  { id: 'quick', title: 'Essentiels' },
-  { id: 'browsers', title: 'Navigateurs' },
-  { id: 'apps', title: 'Applications' },
-  { id: 'dev', title: 'Outils de développement' },
-  { id: 'system', title: 'Système' },
-  { id: 'custom', title: 'Mes emplacements' },
-];
+const GROUPS: TargetGroup[] = ['quick', 'browsers', 'apps', 'dev', 'system', 'custom'];
 
 export function useCleaning(onChanged: () => void, say: (text: string) => void) {
   const [targets, setTargets] = useState<CleanTarget[]>([]);
@@ -38,7 +32,7 @@ export function useCleaning(onChanged: () => void, say: (text: string) => void) 
         const list = await api.cleanTargets();
         setTargets(list);
         await api.measureTargets((m) => {
-          setTargets((prev) => prev.map((t) => (t.id === m.id ? { ...t, bytes: m.unknown ? null : m.bytes, files: m.files } : t)));
+          setTargets((prev) => prev.map((x) => (x.id === m.id ? { ...x, bytes: m.unknown ? null : m.bytes, files: m.files } : x)));
         });
       } while (again.current);
       setStats(await api.stats());
@@ -50,7 +44,7 @@ export function useCleaning(onChanged: () => void, say: (text: string) => void) 
 
   const run = useCallback(async (ids: string[]) => {
     setOutcome(null);
-    setProgress({ targetId: '', label: 'Préparation', freed: 0, index: 0, count: ids.length });
+    setProgress({ targetId: '', label: t('clean.preparing'), freed: 0, index: 0, count: ids.length });
     try {
       const result = await api.cleanRun(ids, setProgress);
       setOutcome(result);
@@ -67,7 +61,7 @@ export function useCleaning(onChanged: () => void, say: (text: string) => void) 
     void (async () => {
       const auto = await api.runAutoClean();
       if (auto && auto.freed > 0) {
-        say(`Nettoyage automatique : ${formatBytes(auto.freed)} libérés.`);
+        say(t('clean.autoDone', { size: formatBytes(auto.freed) }));
         onChanged();
       }
       await refresh();
@@ -77,12 +71,12 @@ export function useCleaning(onChanged: () => void, say: (text: string) => void) 
   }, []);
 
   const setSelected = useCallback((id: string, selected: boolean) => {
-    setTargets((prev) => prev.map((t) => (t.id === id ? { ...t, selected } : t)));
+    setTargets((prev) => prev.map((x) => (x.id === id ? { ...x, selected } : x)));
     void api.setTargetSelected(id, selected);
   }, []);
 
-  const toClean = targets.filter((t) => t.selected && !t.blockedBy);
-  const reclaimable = measuring && targets.every((t) => t.bytes === null) ? null : toClean.reduce((s, t) => s + (t.bytes ?? 0), 0);
+  const toClean = targets.filter((x) => x.selected && !x.blockedBy);
+  const reclaimable = measuring && targets.every((x) => x.bytes === null) ? null : toClean.reduce((sum, x) => sum + (x.bytes ?? 0), 0);
 
   return { targets, measuring, stats, setStats, progress, outcome, setOutcome, refresh, run, setSelected, toClean, reclaimable };
 }
@@ -97,7 +91,7 @@ interface Props {
 }
 
 function age(ms: number | null | undefined) {
-  return ms ? formatAge(ms / 1000) : 'jamais';
+  return ms ? formatAge(ms / 1000) : t('clean.never');
 }
 
 export function Clean({ cleaning, home, say, onChanged }: Props) {
@@ -121,11 +115,11 @@ export function Clean({ cleaning, home, say, onChanged }: Props) {
     void look();
   }, [look]);
 
-  const maxBytes = useMemo(() => Math.max(1, ...targets.map((t) => t.bytes ?? 0)), [targets]);
+  const maxBytes = useMemo(() => Math.max(1, ...targets.map((x) => x.bytes ?? 0)), [targets]);
 
   const start = (list: CleanTarget[]) => {
-    if (list.some((t) => t.risk === 'review' || t.needsPassword)) setAsking(list);
-    else void run(list.map((t) => t.id));
+    if (list.some((x) => x.risk === 'review' || x.needsPassword)) setAsking(list);
+    else void run(list.map((x) => x.id));
   };
 
   const addFolder = async () => {
@@ -142,9 +136,9 @@ export function Clean({ cleaning, home, say, onChanged }: Props) {
     setProjects((prev) => prev?.filter((p) => !o.done.includes(p.path)) ?? null);
     onChanged();
     if (o.done.length) {
-      say(o.mode === 'trash' ? `${formatBytes(o.moved)} déplacés à la corbeille.` : `${formatBytes(o.freed)} libérés.`);
+      say(o.mode === 'trash' ? t('toast.movedSize', { size: formatBytes(o.moved) }) : t('toast.freed', { size: formatBytes(o.freed) }));
     }
-    if (o.failed.length) say(`${baseName(o.failed[0].path)} : ${o.failed[0].reason}`);
+    if (o.failed.length) say(t('toast.failed', { name: baseName(o.failed[0].path), reason: o.failed[0].reason }));
   };
 
   const pickedItems: DeleteItem[] = (projects ?? []).filter((p) => picked.has(p.path)).map((p) => ({ path: p.path, size: p.bytes }));
@@ -156,28 +150,28 @@ export function Clean({ cleaning, home, say, onChanged }: Props) {
         {progress ? (
           <>
             <div className="hero-figure">
-              <span className="hero-label">Nettoyage en cours : {progress.label}</span>
+              <span className="hero-label">{t('clean.running', { label: progress.label })}</span>
               <strong className="num">{formatBytes(progress.freed)}</strong>
-              <span className="muted">libérés</span>
+              <span className="muted">{t('clean.freedWord')}</span>
             </div>
             <div className="hero-action">
               <Bar value={progress.count ? progress.index / progress.count : 0} />
-              <button className="btn ghost" onClick={() => void api.cancelClean()}>Arrêter</button>
+              <button className="btn ghost" onClick={() => void api.cancelClean()}>{t('clean.stop')}</button>
             </div>
           </>
         ) : (
           <>
             <div className="hero-figure">
-              <span className="hero-label">Votre sélection</span>
+              <span className="hero-label">{t('clean.selection')}</span>
               <strong className="num">{reclaimable === null ? '…' : formatBytes(reclaimable)}</strong>
               <span className="muted">
-                à récupérer · dernier nettoyage {age(stats?.lastCleanAt)}
-                {stats && stats.totalFreed > 0 && <> · {formatBytes(stats.totalFreed)} libérés depuis le début</>}
+                {t('clean.toRecover', { age: age(stats?.lastCleanAt) })}
+                {stats && stats.totalFreed > 0 && t('clean.sinceStart', { size: formatBytes(stats.totalFreed) })}
               </span>
             </div>
             <div className="hero-action">
               <button className="btn primary big" disabled={!toClean.length || measuring} onClick={() => start(toClean)}>
-                <Icon name="clean" size={18} /> Nettoyer maintenant
+                <Icon name="clean" size={18} /> {t('clean.now')}
               </button>
               <label className="auto">
                 <input
@@ -189,8 +183,8 @@ export function Clean({ cleaning, home, say, onChanged }: Props) {
                     void api.setAutoClean(on);
                   }}
                 />
-                Nettoyer à chaque ouverture de Clairière
-                <small>(seulement ce qui se recrée tout seul)</small>
+                {t('clean.auto')}
+                <small>{t('clean.autoHint')}</small>
               </label>
             </div>
           </>
@@ -201,50 +195,50 @@ export function Clean({ cleaning, home, say, onChanged }: Props) {
         <section className="result">
           <Icon name="check" size={18} />
           <div>
-            <strong>{outcome.cancelled ? 'Nettoyage arrêté' : 'Terminé'} : {formatBytes(outcome.freed)} libérés en {formatDuration(outcome.ms)}.</strong>
+            <strong>{t(outcome.cancelled ? 'clean.summaryStopped' : 'clean.summaryDone', { size: formatBytes(outcome.freed), time: formatDuration(outcome.ms) })}</strong>
             {outcome.results.filter((r) => r.note).map((r) => (
               <div key={r.id} className="muted">{r.label} — {r.note}</div>
             ))}
           </div>
-          <button className="btn icon-only ghost" aria-label="Fermer" onClick={() => setOutcome(null)}><Icon name="x" /></button>
+          <button className="btn icon-only ghost" aria-label={t('common.close')} onClick={() => setOutcome(null)}><Icon name="x" /></button>
         </section>
       )}
 
       {GROUPS.map((g) => {
-        const rows = targets.filter((t) => t.group === g.id).sort((a, b) => (b.bytes ?? -1) - (a.bytes ?? -1));
-        if (rows.length === 0 && g.id !== 'custom') return null;
+        const rows = targets.filter((x) => x.group === g).sort((a, b) => (b.bytes ?? -1) - (a.bytes ?? -1));
+        if (rows.length === 0 && g !== 'custom') return null;
         return (
-          <section key={g.id} className="group">
-            <h2>{g.title}</h2>
+          <section key={g} className="group">
+            <h2>{t(`group.${g}`)}</h2>
             <ul className="targets">
-              {rows.map((t) => (
-                <li key={t.id} className={t.selected ? 'on' : ''}>
+              {rows.map((row) => (
+                <li key={row.id} className={row.selected ? 'on' : ''}>
                   <input
                     type="checkbox"
-                    id={`t-${t.id}`}
-                    checked={t.selected}
-                    onChange={(e) => setSelected(t.id, e.target.checked)}
+                    id={`t-${row.id}`}
+                    checked={row.selected}
+                    onChange={(e) => setSelected(row.id, e.target.checked)}
                   />
-                  <label htmlFor={`t-${t.id}`} className="target-main">
+                  <label htmlFor={`t-${row.id}`} className="target-main">
                     <span className="target-title">
-                      <strong>{t.label}</strong>
-                      {t.needsPassword && <em className="chip"><Icon name="lock" size={12} /> mot de passe</em>}
-                      {t.blockedBy && <em className="chip warn"><Icon name="warn" size={12} /> {t.blockedBy} est ouvert : ignoré</em>}
+                      <strong>{row.label}</strong>
+                      {row.needsPassword && <em className="chip"><Icon name="lock" size={12} /> {t('chip.password')}</em>}
+                      {row.blockedBy && <em className="chip warn"><Icon name="warn" size={12} /> {t('chip.blocked', { name: row.blockedBy })}</em>}
                     </span>
-                    <small>{t.hint}</small>
+                    <small>{row.hint}</small>
                   </label>
                   <span className="target-size">
-                    <span className="num">{t.bytes === null ? (measuring ? '…' : 'Inconnu') : formatBytes(t.bytes)}</span>
-                    <Bar value={(t.bytes ?? 0) / maxBytes} />
+                    <span className="num">{row.bytes === null ? (measuring ? '…' : t('size.unknown')) : formatBytes(row.bytes)}</span>
+                    <Bar value={(row.bytes ?? 0) / maxBytes} />
                   </span>
                   <span className="target-actions">
-                    <button className="btn small" disabled={!!progress || !!t.blockedBy || t.bytes === 0} onClick={() => start([t])}>Vider</button>
-                    {t.group === 'custom' && (
+                    <button className="btn small" disabled={!!progress || !!row.blockedBy || row.bytes === 0} onClick={() => start([row])}>{t('clean.empty')}</button>
+                    {row.group === 'custom' && (
                       <button
                         className="btn small ghost icon-only"
-                        aria-label={`Retirer ${t.label} de mes emplacements`}
-                        title="Retirer de la liste (le dossier reste en place)"
-                        onClick={() => void api.removeCustomTarget(t.id).then(refresh)}
+                        aria-label={t('clean.removeCustom', { label: row.label })}
+                        title={t('clean.removeCustomTitle')}
+                        onClick={() => void api.removeCustomTarget(row.id).then(refresh)}
                       >
                         <Icon name="x" size={14} />
                       </button>
@@ -252,9 +246,9 @@ export function Clean({ cleaning, home, say, onChanged }: Props) {
                   </span>
                 </li>
               ))}
-              {g.id === 'custom' && (
+              {g === 'custom' && (
                 <li className="add-row">
-                  <button className="btn ghost" onClick={() => void addFolder()}><Icon name="plus" /> Ajouter un dossier à vider régulièrement</button>
+                  <button className="btn ghost" onClick={() => void addFolder()}><Icon name="plus" /> {t('clean.addFolder')}</button>
                 </li>
               )}
             </ul>
@@ -264,14 +258,14 @@ export function Clean({ cleaning, home, say, onChanged }: Props) {
 
       <section className="group">
         <h2>
-          Dossiers de projets recréables
+          {t('projects.title')}
           {projects && projects.length > 0 && <small className="num"> {formatBytes(projectsTotal)}</small>}
         </h2>
         <p className="group-note">
-          Dépendances et résultats de compilation de vos projets, dans votre dossier personnel. Un projet les recrée à sa prochaine installation : choisissez ceux que vous n'utilisez plus.
+          {t('projects.note')}
         </p>
-        {lookingProjects && <p className="muted loading">Recherche dans votre dossier personnel…</p>}
-        {projects && projects.length === 0 && !lookingProjects && <p className="empty">Aucun trouvé.</p>}
+        {lookingProjects && <p className="muted loading">{t('projects.looking')}</p>}
+        {projects && projects.length === 0 && !lookingProjects && <p className="empty">{t('projects.none')}</p>}
         {projects && projects.length > 0 && (
           <ul className="targets projects">
             {projects.slice(0, 200).map((p) => (
@@ -291,9 +285,9 @@ export function Clean({ cleaning, home, say, onChanged }: Props) {
                 <label htmlFor={`p-${p.id}`} className="target-main">
                   <span className="target-title">
                     <strong>{baseName(parentPath(p.path))}</strong>
-                    <em className="chip">{ARTEFACT_LABEL[p.kind]}</em>
+                    <em className="chip">{artefactLabel(p.kind)}</em>
                   </span>
-                  <small title={p.path}>{shortPath(p.path, home)} · modifié {formatAge(p.mtime)}</small>
+                  <small title={p.path}>{t('projects.modified', { path: shortPath(p.path, home), age: formatAge(p.mtime) })}</small>
                 </label>
                 <span className="target-size">
                   <span className="num">{formatBytes(p.bytes)}</span>
@@ -305,36 +299,36 @@ export function Clean({ cleaning, home, say, onChanged }: Props) {
         )}
         {pickedItems.length > 0 && (
           <div className="project-actions">
-            <span>{plural(pickedItems.length, 'dossier choisi', 'dossiers choisis')} · <strong className="num">{formatBytes(pickedItems.reduce((s, i) => s + i.size, 0))}</strong></span>
-            <button className="btn danger" onClick={() => setConfirmProjects(pickedItems)}><Icon name="trash" /> Supprimer…</button>
+            <span>{tn('projects.picked', pickedItems.length)} · <strong className="num">{formatBytes(pickedItems.reduce((s, i) => s + i.size, 0))}</strong></span>
+            <button className="btn danger" onClick={() => setConfirmProjects(pickedItems)}><Icon name="trash" /> {t('action.delete')}</button>
           </div>
         )}
       </section>
 
       {asking && (
-        <Modal title="Vider ces emplacements ?" onClose={() => setAsking(null)}>
+        <Modal title={t('clean.confirmTitle')} onClose={() => setAsking(null)}>
           <ul className="confirm-list">
-            {asking.map((t) => (
-              <li key={t.id}>
-                <span className="confirm-path">{t.label}</span>
-                <span className="num">{t.bytes === null ? '—' : formatBytes(t.bytes)}</span>
-                {t.risk === 'review' && <em className="warn"><Icon name="warn" size={13} /> {t.hint}</em>}
-                {t.needsPassword && <em><Icon name="lock" size={13} /> Le système vous demandera votre mot de passe.</em>}
+            {asking.map((row) => (
+              <li key={row.id}>
+                <span className="confirm-path">{row.label}</span>
+                <span className="num">{row.bytes === null ? '—' : formatBytes(row.bytes)}</span>
+                {row.risk === 'review' && <em className="warn"><Icon name="warn" size={13} /> {row.hint}</em>}
+                {row.needsPassword && <em><Icon name="lock" size={13} /> {t('clean.passwordNote')}</em>}
               </li>
             ))}
           </ul>
           <div className="modal-actions">
-            <button className="btn ghost" data-autofocus onClick={() => setAsking(null)}>Annuler</button>
+            <button className="btn ghost" data-autofocus onClick={() => setAsking(null)}>{t('common.cancel')}</button>
             <span className="spacer" />
             <button
               className="btn primary"
               onClick={() => {
-                const ids = asking.map((t) => t.id);
+                const ids = asking.map((x) => x.id);
                 setAsking(null);
                 void run(ids);
               }}
             >
-              Vider
+              {t('clean.empty')}
             </button>
           </div>
         </Modal>

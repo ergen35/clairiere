@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import type { DiskInfo } from '../shared/types';
 import { api } from './api';
 import { formatBytes, formatPercent, shortPath } from './format';
+import { rich, t } from './i18n';
 import { Bar, Icon, usageTone } from './ui';
 
 interface Props {
@@ -30,8 +31,8 @@ export function Home({ disks, home, reclaimable, onScan, onClean }: Props) {
   return (
     <div className="page home">
       <header className="page-head">
-        <h1>Vos disques</h1>
-        <p>Choisissez ce qu'il faut analyser. Les résultats arrivent en quelques secondes.</p>
+        <h1>{t('home.title')}</h1>
+        <p>{t('home.lead')}</p>
       </header>
 
       {tight && (
@@ -39,12 +40,15 @@ export function Home({ disks, home, reclaimable, onScan, onClean }: Props) {
           <Icon name="warn" size={20} />
           <div>
             <strong>
-              {tight.system ? 'Votre disque système' : tight.label} est plein à {formatPercent(tight.used, tight.total)}.
+              {tight.system
+                ? t('home.tightSystem', { percent: formatPercent(tight.used, tight.total) })
+                : t('home.tightOther', { label: tight.label, percent: formatPercent(tight.used, tight.total) })}
             </strong>{' '}
-            Il ne reste que {formatBytes(tight.free)}
-            {reclaimable ? <>, et {formatBytes(reclaimable)} de caches peuvent partir tout de suite.</> : '.'}
+            {reclaimable
+              ? t('home.leftReclaim', { free: formatBytes(tight.free), reclaim: formatBytes(reclaimable) })
+              : t('home.left', { free: formatBytes(tight.free) })}
           </div>
-          <button className="btn primary" onClick={onClean}>Faire de la place</button>
+          <button className="btn primary" onClick={onClean}>{t('home.makeRoom')}</button>
         </section>
       )}
 
@@ -61,31 +65,31 @@ export function Home({ disks, home, reclaimable, onScan, onClean }: Props) {
                 </div>
                 <Bar value={d.used / d.total} tone={tone} />
                 <div className="disk-figures">
-                  <span><strong className="num">{formatBytes(d.free)}</strong> libres</span>
-                  <span className="muted num">{formatBytes(d.used)} utilisés sur {formatBytes(d.total)}</span>
+                  <span className="num">{rich(t('disk.free', { size: formatBytes(d.free) }))}</span>
+                  <span className="muted num">{t('disk.usedOf', { used: formatBytes(d.used), total: formatBytes(d.total) })}</span>
                 </div>
               </div>
-              <button className="btn" onClick={() => onScan(d.mount)}>Analyser</button>
+              <button className="btn" onClick={() => onScan(d.mount)}>{t('disk.analyse')}</button>
             </li>
           );
         })}
-        {disks.length === 0 && <li className="empty">Aucun disque trouvé.</li>}
+        {disks.length === 0 && <li className="empty">{t('disk.none')}</li>}
       </ul>
 
       <div className="shortcuts">
         <button className="shortcut" onClick={() => onScan(home)}>
           <Icon name="home" size={18} />
           <span>
-            <strong>Mon dossier personnel</strong>
-            <small className="muted">{shortPath(home, home) || home} : c'est souvent là que tout se cache</small>
+            <strong>{t('home.homeFolder')}</strong>
+            <small className="muted">{t('home.homeHint', { path: shortPath(home, home) || home })}</small>
           </span>
           <Icon name="chevron" />
         </button>
         <button className="shortcut" onClick={() => void pick()}>
           <Icon name="folder" size={18} />
           <span>
-            <strong>Un autre dossier…</strong>
-            <small className="muted">Analyser seulement ce qui vous intéresse</small>
+            <strong>{t('home.otherFolder')}</strong>
+            <small className="muted">{t('home.otherHint')}</small>
           </span>
           <Icon name="chevron" />
         </button>
@@ -99,12 +103,12 @@ export function Home({ disks, home, reclaimable, onScan, onClean }: Props) {
               void api.installLauncher().then(() => setInstalled(true));
             }}
           >
-            Ajouter Clairière au menu des applications
-          </button>{' '}
-          pour la retrouver sans passer par ici.
+            {t('home.launcherAdd')}
+          </button>
+          {t('home.launcherRest')}
         </p>
       )}
-      {installed && <p className="foot-note">Clairière est maintenant dans le menu des applications.</p>}
+      {installed && <p className="foot-note">{t('home.launcherDone')}</p>}
     </div>
   );
 }

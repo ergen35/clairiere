@@ -1,7 +1,8 @@
 import { ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { DeleteItem, DeleteMode, DeleteOutcome, ItemCheck } from '../shared/types';
 import { api } from './api';
-import { formatBytes, plural, shortPath } from './format';
+import { count, formatBytes, shortPath } from './format';
+import { rich, t, tn } from './i18n';
 
 const PATHS: Record<string, ReactNode> = {
   disk: <><rect x="3" y="5" width="18" height="14" rx="2.5" /><path d="M7 15h.01M11 15h6" /></>,
@@ -21,6 +22,7 @@ const PATHS: Record<string, ReactNode> = {
   warn: <><path d="M12 4l9 16H3z" /><path d="M12 10v4M12 17h.01" /></>,
   check: <path d="M5 12l5 5 9-10" />,
   lock: <><rect x="5" y="11" width="14" height="9" rx="2" /><path d="M8 11V8a4 4 0 0 1 8 0v3" /></>,
+  globe: <><circle cx="12" cy="12" r="9" /><path d="M3 12h18" /><path d="M12 3c2.5 2.6 3.8 5.6 3.8 9s-1.3 6.4-3.8 9c-2.5-2.6-3.8-5.6-3.8-9S9.5 5.6 12 3z" /></>,
 };
 
 export function Icon({ name, size = 16 }: { name: string; size?: number }) {
@@ -132,11 +134,11 @@ export function ConfirmDelete({ items, home, onClose, onDone }: { items: DeleteI
     }
   };
 
-  const title = allowed.length === 1 ? 'Supprimer cet élément ?' : `Supprimer ${plural(allowed.length, 'élément')} ?`;
+  const title = allowed.length === 1 ? t('confirm.one') : t('confirm.many', { items: count('count.item', allowed.length) });
   const shown = items.slice(0, 6);
 
   return (
-    <Modal title={refused.size === items.length && checks ? 'Suppression impossible' : title} onClose={busy ? () => {} : onClose}>
+    <Modal title={refused.size === items.length && checks ? t('confirm.impossible') : title} onClose={busy ? () => {} : onClose}>
       <ul className="confirm-list">
         {shown.map((i) => (
           <li key={i.path} className={refused.has(i.path) ? 'refused' : ''}>
@@ -146,24 +148,21 @@ export function ConfirmDelete({ items, home, onClose, onDone }: { items: DeleteI
             {warnings.has(i.path) && !refused.has(i.path) && <em className="warn"><Icon name="warn" size={13} /> {warnings.get(i.path)}</em>}
           </li>
         ))}
-        {items.length > shown.length && <li className="more">et {plural(items.length - shown.length, 'autre')}</li>}
+        {items.length > shown.length && <li className="more">{tn('confirm.more', items.length - shown.length)}</li>}
       </ul>
       {allowed.length > 0 && (
-        <p className="confirm-note">
-          <strong>Définitif</strong> rend <strong>{formatBytes(total)}</strong> au disque tout de suite, sans retour possible.{' '}
-          <strong>Corbeille</strong> permet de changer d'avis, mais la place ne revient qu'une fois la corbeille vidée.
-        </p>
+        <p className="confirm-note">{rich(t('confirm.note', { size: formatBytes(total) }))}</p>
       )}
       <div className="modal-actions">
-        <button className="btn ghost" data-autofocus disabled={!!busy} onClick={onClose}>Annuler</button>
+        <button className="btn ghost" data-autofocus disabled={!!busy} onClick={onClose}>{t('common.cancel')}</button>
         <span className="spacer" />
         {allowed.length > 0 && checks && (
           <>
             <button className="btn" disabled={!!busy} onClick={() => void run('trash')}>
-              {busy === 'trash' ? 'Déplacement…' : 'Mettre à la corbeille'}
+              {busy === 'trash' ? t('confirm.moving') : t('confirm.toTrash')}
             </button>
             <button className="btn danger" disabled={!!busy} onClick={() => void run('permanent')}>
-              {busy === 'permanent' ? 'Suppression…' : 'Supprimer définitivement'}
+              {busy === 'permanent' ? t('confirm.deleting') : t('confirm.permanent')}
             </button>
           </>
         )}

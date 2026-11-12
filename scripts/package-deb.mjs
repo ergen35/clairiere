@@ -65,7 +65,7 @@ try {
   copyFileSync(join(electronDir, 'electron.bin'), join(opt, 'clairiere'));
   chmodSync(join(opt, 'clairiere'), 0o755);
   mkdirSync(join(opt, 'locales'));
-  for (const locale of ['fr.pak', 'en-US.pak']) copyFileSync(join(electronDir, 'locales', locale), join(opt, 'locales', locale));
+  for (const locale of ['en-US.pak', 'fr.pak', 'es.pak', 'de.pak', 'zh-CN.pak', 'ko.pak', 'ru.pak']) copyFileSync(join(electronDir, 'locales', locale), join(opt, 'locales', locale));
   rmSync(join(opt, 'resources', 'default_app.asar'), { force: true });
 
   // The app itself.
@@ -92,9 +92,16 @@ try {
     '[Desktop Entry]',
     'Type=Application',
     'Name=Clairière',
-    'GenericName=Analyse de disque',
-    'Comment=Analyser les disques et libérer de la place',
-    'Keywords=disque;espace;cache;nettoyage;dossier;',
+    'GenericName=Disk usage analyser',
+    'GenericName[fr]=Analyse de disque',
+    'GenericName[es]=Analizador de discos',
+    'GenericName[de]=Speicherplatzanalyse',
+    'GenericName[zh_CN]=磁盘分析器',
+    'GenericName[ko]=디스크 분석기',
+    'GenericName[ru]=Анализатор дисков',
+    'Comment=Analyse your disks and free up space',
+    'Comment[fr]=Analyser les disques et libérer de la place',
+    'Keywords=disk;space;cache;clean;folder;disque;espace;nettoyage;dossier;',
     'Exec=/usr/bin/clairiere',
     'Icon=clairiere',
     'Terminal=false',
@@ -133,15 +140,15 @@ try {
     'Section: utils',
     'Priority: optional',
     `Description: ${pkg.description}`,
-    ' Carte des dossiers, gros fichiers, suppression protégée et nettoyage',
-    ' des caches en un clic.',
+    ' Folder map, big files, protected deletion and one-click cache',
+    ' clean-up, in English, French, Spanish, German, Chinese, Korean and Russian.',
     '',
   ].join('\n'));
   chmodSync(join(stage, 'DEBIAN'), 0o755);
 
   mkdirSync(outDir, { recursive: true });
   execFileSync('dpkg-deb', ['--root-owner-group', '-Zxz', '-z6', '--build', stage, output], { stdio: 'inherit' });
-  console.log(`${output} (${Math.round(statSync(output).size / 1e6)} Mo)`);
+  console.log(`${output} (${Math.round(statSync(output).size / 1e6)} MB)`);
 } finally {
   rmSync(stage, { recursive: true, force: true });
 }

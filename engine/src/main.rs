@@ -229,12 +229,12 @@ fn view_node(tree: &Tree, id: u32, depth: u32, opts: &mut ViewOpts) -> Value {
 fn cmd_view(st: &State, id: u64, msg: &Value) {
     let guard = st.tree.read().unwrap();
     let Some(tree) = guard.as_ref() else {
-        send(st, json!({"id": id, "ok": false, "error": "Aucune analyse en mémoire."}));
+        send(st, json!({"id": id, "ok": false, "error": "no_scan"}));
         return;
     };
     let node = msg["node"].as_u64().unwrap_or(0) as u32;
     if node as usize >= tree.nodes.len() {
-        send(st, json!({"id": id, "ok": false, "error": "Dossier inconnu."}));
+        send(st, json!({"id": id, "ok": false, "error": "unknown_folder"}));
         return;
     }
     let mut opts = ViewOpts {
@@ -309,11 +309,12 @@ fn cmd_measure(st: Arc<State>, id: u64, msg: &Value) {
 }
 
 /// The engine's own last line of defence; the app applies its stricter list first.
+/// A disk's root ("/", "C:\\") has no named part and is always refused.
 fn refuse(path: &Path) -> bool {
     if !path.is_absolute() || path.components().any(|c| matches!(c, Component::ParentDir)) {
         return true;
     }
-    path.components().count() < 2
+    !path.components().any(|c| matches!(c, Component::Normal(_)))
 }
 
 fn cmd_delete(st: Arc<State>, id: u64, msg: &Value) {
@@ -345,7 +346,7 @@ fn cmd_delete(st: Arc<State>, id: u64, msg: &Value) {
             let before = ctx.freed.load(Relaxed);
             let errors_before = ctx.errors.load(Relaxed);
             if refuse(p) {
-                results.push(json!({"path": path, "freed": 0, "ok": false, "error": "Chemin refusé."}));
+                results.push(json!({"path": path, "freed": 0, "ok": false, "error": "refused"}));
                 continue;
             }
             remove::remove(p, keep_root, &ctx);
@@ -429,7 +430,7 @@ fn main() {
                 }
                 send(&st, json!({"id": id, "ok": true}));
             }
-            _ => send(&st, json!({"id": id, "ok": false, "error": "Commande inconnue."})),
+            _ => send(&st, json!({"id": id, "ok": false, "error": "unknown_command"})),
         }
     }
 }

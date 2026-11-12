@@ -1,5 +1,8 @@
 // Sample data so the interface can be seen in a plain browser, which may not read disks.
+import type { Key, Lang } from '../shared/i18n';
+import { isLang } from '../shared/i18n';
 import type { Api, Artefact, CleanTarget, DiskInfo, ScanResult, TopFile, TreeNode, ViewResult } from '../shared/types';
+import { t as tr } from './i18n';
 
 const GB = 1e9;
 const MB = 1e6;
@@ -126,11 +129,11 @@ const TOTAL_DISK = 512 * GB;
 let freedOnDisk = 0;
 const disks = (): DiskInfo[] => [
   {
-    id: 'demo-1', device: '/dev/demo1', mount: '/', fstype: 'ext4', label: 'Disque système', detail: 'Disque interne',
+    id: 'demo-1', device: '/dev/demo1', mount: '/', fstype: 'ext4', label: tr('disk.system'), detail: 'SSD',
     total: TOTAL_DISK, used: 455 * GB - freedOnDisk, free: TOTAL_DISK - (455 * GB - freedOnDisk), system: true,
   },
   {
-    id: 'demo-2', device: '/dev/demo2', mount: '/media/sauvegardes', fstype: 'ext4', label: 'Sauvegardes', detail: 'Disque externe',
+    id: 'demo-2', device: '/dev/demo2', mount: '/media/sauvegardes', fstype: 'ext4', label: 'Backup', detail: 'USB',
     total: 2000 * GB, used: 830 * GB, free: 1170 * GB, system: false,
   },
 ];
@@ -145,18 +148,27 @@ function target(id: string, group: CleanTarget['group'], label: string, hint: st
   };
 }
 
-let targets: DemoTarget[] = [
-  target('trash', 'quick', 'Corbeille', 'Ce que vous avez déjà jeté. Vider la corbeille rend enfin la place au disque, sans retour possible.', 3.4 * GB, 'review'),
-  target('thumbnails', 'quick', 'Miniatures', 'Aperçus de photos et vidéos : ils se recréent quand vous rouvrez un dossier.', 820 * MB),
-  target('chrome', 'browsers', 'Google Chrome', 'Pages et images gardées pour aller plus vite. Vos favoris, mots de passe et sessions ne sont pas touchés.', 4.8 * GB),
-  target('firefox', 'browsers', 'Firefox', 'Pages et images gardées pour aller plus vite. Vos favoris, mots de passe et sessions ne sont pas touchés.', 1.2 * GB, 'safe', { blockedBy: 'Firefox' }),
-  target('spotify', 'apps', 'Spotify', 'Musique gardée pour la réécoute. Les titres téléchargés hors ligne peuvent être à recharger.', 1.1 * GB),
-  target('othercaches', 'apps', "Autres caches d'applications", 'Tout le reste du dossier de cache. Sans danger pour vos fichiers, mais une application ouverte peut devoir redémarrer.', 2.3 * GB, 'review'),
-  target('npm', 'dev', 'npm', 'Paquets téléchargés : ils reviennent tout seuls à la prochaine installation.', 3.1 * GB),
-  target('pip', 'dev', 'pip', 'Paquets téléchargés : ils reviennent tout seuls à la prochaine installation.', 1.9 * GB),
-  target('apt', 'system', 'Paquets Ubuntu téléchargés', 'Installateurs déjà utilisés : le système les retélécharge si besoin.', 1.4 * GB, 'safe', { needsPassword: true, selected: false }),
-  target('docker', 'system', 'Docker : images et cache inutilisés', 'Retire les images qu’aucun conteneur n’utilise et le cache de construction. Elles seront à retélécharger.', 11.2 * GB, 'review'),
+const keyed = (id: string, group: CleanTarget['group'], label: Key | string, hint: Key, bytes: number, risk: 'safe' | 'review' = 'safe', extra: Partial<CleanTarget> = {}) =>
+  ({ ...target(id, group, label, hint, bytes, risk, extra), labelKey: label.includes('.') ? label as Key : undefined, hintKey: hint });
+
+let targets: (DemoTarget & { labelKey?: Key; hintKey?: Key })[] = [
+  keyed('trash', 'quick', 't.trash', 'h.trash', 3.4 * GB, 'review'),
+  keyed('thumbnails', 'quick', 't.thumbnails', 'h.thumbnails', 820 * MB),
+  keyed('chrome', 'browsers', 'Google Chrome', 'h.browser', 4.8 * GB),
+  keyed('firefox', 'browsers', 'Firefox', 'h.browser', 1.2 * GB, 'safe', { blockedBy: 'Firefox' }),
+  keyed('spotify', 'apps', 'Spotify', 'h.spotify', 1.1 * GB),
+  keyed('othercaches', 'apps', 't.othercaches', 'h.othercaches', 2.3 * GB, 'review'),
+  keyed('npm', 'dev', 'npm', 'h.download', 3.1 * GB),
+  keyed('pip', 'dev', 'pip', 'h.download', 1.9 * GB),
+  keyed('apt', 'system', 't.apt', 'h.apt', 1.4 * GB, 'safe', { needsPassword: true, selected: false }),
+  keyed('docker', 'system', 't.docker', 'h.docker', 11.2 * GB, 'review'),
 ];
+
+const shown = (x: (typeof targets)[number]): CleanTarget => {
+  const { real: _real, labelKey, hintKey, ...rest } = x;
+  void _real;
+  return { ...rest, label: labelKey ? tr(labelKey) : rest.label, hint: hintKey ? tr(hintKey) : rest.hint };
+};
 
 let stats = { totalFreed: 0, lastCleanAt: null as number | null, lastFreed: 0, autoClean: false };
 let customId = 0;
@@ -164,6 +176,15 @@ let customId = 0;
 export function demoApi(): Api {
   return {
     isDemo: true,
+    platform: async () => 'linux',
+    getLanguage: async () => {
+      const saved = localStorage.getItem('clairiere-language');
+      return isLang(saved) ? saved : null;
+    },
+    setLanguage: async (lang: Lang) => {
+      localStorage.setItem('clairiere-language', lang);
+    },
+    openDiskAccessSettings: async () => {},
     home: async () => ROOT,
     disks: async () => disks(),
     scan: async (path, onProgress) => {
@@ -219,7 +240,7 @@ export function demoApi(): Api {
     copyPath: async (path) => {
       await navigator.clipboard?.writeText(path).catch(() => {});
     },
-    cleanTargets: async () => targets.map((t) => ({ ...t })),
+    cleanTargets: async () => targets.map(shown),
     measureTargets: async (onMeasure) => {
       for (const t of targets) {
         await wait(25);
@@ -237,14 +258,14 @@ export function demoApi(): Api {
       const started = performance.now();
       for (const t of targets.filter((x) => ids.includes(x.id))) {
         index += 1;
-        onProgress({ targetId: t.id, label: t.label, freed, index, count: ids.length });
+        onProgress({ targetId: t.id, label: shown(t).label, freed, index, count: ids.length });
         await wait(120);
         if (t.blockedBy) {
-          results.push({ id: t.id, label: t.label, freed: 0, note: `Ignoré : ${t.blockedBy} est ouvert.` });
+          results.push({ id: t.id, label: shown(t).label, freed: 0, note: tr('note.skipped', { name: t.blockedBy }) });
           continue;
         }
         freed += t.real;
-        results.push({ id: t.id, label: t.label, freed: t.real });
+        results.push({ id: t.id, label: shown(t).label, freed: t.real });
         t.real = 0;
       }
       freedOnDisk += freed;

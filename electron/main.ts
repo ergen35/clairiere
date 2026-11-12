@@ -1,15 +1,20 @@
 import { app, BrowserWindow, clipboard, dialog, ipcMain, NativeImage, shell } from 'electron';
-import { execFile, execFileSync } from 'node:child_process';
+import { execFile } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
-import { statfs } from 'node:fs/promises';
-import { basename, dirname, join, resolve } from 'node:path';
+import { basename, delimiter, dirname, join, parse, resolve, sep } from 'node:path';
+import { isLang, Key, Lang } from '../shared/i18n';
 import type {
-  Artefact, CleanOutcome, DeleteItem, DeleteMode, DeleteOutcome, DiskInfo, ItemCheck, ScanResult, TargetMeasure, ViewOptions,
+  Artefact, CleanOutcome, DeleteItem, DeleteMode, DeleteOutcome, ItemCheck, ScanResult, TargetMeasure, ViewOptions,
 } from '../shared/types';
 import { ALLOWED_LINKS } from '../shared/about';
+import { diskFree, listDisks, readMounts } from './disks';
 import { Engine } from './engine';
+import { setMainLang, tr } from './i18n';
 import { refusal, SafetyContext, warning } from './safety';
-import { blockedBy, home, resolveTargets, Resolved, runningPrograms, toPublic } from './targets';
+import { blockedBy, home, labelOf, resolveTargets, Resolved, runningPrograms, toPublic } from './targets';
+
+const IS_WIN = process.platform === 'win32';
+const IS_MAC = process.platform === 'darwin';
 
 // ----- Command line ---------------------------------------------------------------
 const shotIndex = process.argv.indexOf('--screenshot');
@@ -20,8 +25,17 @@ if (shotIndex >= 0 && !screenshotFile) {
 }
 if (screenshotFile) app.disableHardwareAcceleration();
 
+// Started from the Finder, a Mac app only sees the bare system PATH: add where Homebrew and Docker live.
+if (IS_MAC) {
+  const extra = ['/opt/homebrew/bin', '/usr/local/bin', '/Applications/Docker.app/Contents/Resources/bin'];
+  const have = (process.env.PATH ?? '').split(delimiter);
+  process.env.PATH = [...have, ...extra.filter((d) => !have.includes(d))].join(delimiter);
+}
+
+// The engine has to be a real file on disk to run, outside any app archive.
 const appRoot = app.getAppPath();
-const engine = new Engine(join(appRoot, 'engine-bin', 'clairiere-engine'));
+const unpacked = appRoot.replace(/app\.asar$/, 'app.asar.unpacked');
+const engine = new Engine(join(unpacked, 'engine-bin', IS_WIN ? 'clairiere-engine.exe' : 'clairiere-engine'));
 let win: BrowserWindow | null = null;
 
 function emit(event: string, data: unknown) {
@@ -30,6 +44,8 @@ function emit(event: string, data: unknown) {
 
 // ----- Saved settings -------------------------------------------------------------
 interface Settings {
+  /** Missing until the person picks one at the first start. */
+  language?: Lang;
   overrides: Record<string, boolean>;
   customs: { id: string; path: string }[];
   totalFreed: number;
@@ -46,6 +62,8 @@ function loadSettings() {
   } catch {
     settings = { ...defaults };
   }
+  if (!isLang(settings.language)) settings.language = undefined;
+  if (settings.language) setMainLang(settings.language);
 }
 function saveSettings() {
   if (screenshotFile) return;
@@ -53,84 +71,8 @@ function saveSettings() {
   writeFileSync(settingsFile(), JSON.stringify(settings, null, 2));
 }
 
-// ----- Disks ----------------------------------------------------------------------
-const NETWORK_FS = /^(nfs|nfs4|cifs|smb3|sshfs|fuse\.sshfs|9p)$/;
-
-function unescapeMount(s: string) {
-  return s.replace(/\\([0-7]{3})/g, (_, oct) => String.fromCharCode(parseInt(oct, 8)));
-}
-
-function readMounts(): { mount: string; device: string; fstype: string }[] {
-  const out = new Map<string, { mount: string; device: string; fstype: string }>();
-  let text = '';
-  try {
-    text = readFileSync('/proc/self/mountinfo', 'utf8');
-  } catch {
-    return [];
-  }
-  for (const line of text.split('\n')) {
-    const [left, right] = line.split(' - ');
-    if (!right) continue;
-    const a = left.split(' ');
-    const [fstype, device] = right.split(' ');
-    const mount = unescapeMount(a[4]);
-    if (!device.startsWith('/dev/') || device.startsWith('/dev/loop') || fstype === 'squashfs' || NETWORK_FS.test(fstype)) continue;
-    if (a[3] !== '/' && fstype !== 'btrfs') continue; // A folder bound elsewhere, not a disk.
-    const seen = out.get(device);
-    if (!seen || mount.length < seen.mount.length) out.set(device, { mount, device, fstype });
-  }
-  return [...out.values()];
-}
-
-interface BlockInfo {
-  path: string;
-  label: string | null;
-  model: string | null;
-  children?: BlockInfo[];
-}
-
-function blockDevices(): Map<string, { label: string | null; model: string | null }> {
-  const out = new Map<string, { label: string | null; model: string | null }>();
-  try {
-    const raw = execFileSync('lsblk', ['-J', '-o', 'PATH,LABEL,MODEL'], { encoding: 'utf8', timeout: 1500, stdio: ['ignore', 'pipe', 'ignore'] });
-    const walk = (list: BlockInfo[], model: string | null) => {
-      for (const b of list) {
-        const m = b.model ?? model;
-        out.set(b.path, { label: b.label, model: m });
-        if (b.children) walk(b.children, m);
-      }
-    };
-    walk(JSON.parse(raw).blockdevices ?? [], null);
-  } catch {
-    // Friendly names are a nicety: fall back to the mount point.
-  }
-  return out;
-}
-
-async function listDisks(): Promise<DiskInfo[]> {
-  const block = blockDevices();
-  const disks: DiskInfo[] = [];
-  for (const m of readMounts()) {
-    try {
-      const s = await statfs(m.mount);
-      const total = s.blocks * s.bsize;
-      if (total === 0) continue;
-      const free = s.bavail * s.bsize;
-      const used = (s.blocks - s.bfree) * s.bsize;
-      const info = block.get(m.device);
-      const system = m.mount === '/';
-      const tail = m.mount.split('/').pop() || m.mount;
-      const label = info?.label || (system ? 'Disque système' : m.mount === '/boot/efi' || m.mount === '/boot' ? 'Démarrage' : tail);
-      disks.push({
-        id: m.device, device: m.device, mount: m.mount, fstype: m.fstype, label,
-        detail: info?.model?.trim() || m.device, total, used, free, system,
-      });
-    } catch {
-      // Disk went away while listing it.
-    }
-  }
-  return disks.sort((a, b) => Number(b.system) - Number(a.system) || b.total - a.total);
-}
+// ----- Safety ---------------------------------------------------------------------
+const USUAL_NAMES = ['Documents', 'Images', 'Pictures', 'Musique', 'Music', 'Vidéos', 'Videos', 'Movies', 'Bureau', 'Desktop', 'Téléchargements', 'Downloads', 'OneDrive'];
 
 function safety(): SafetyContext {
   const fromSystem = (['documents', 'pictures', 'music', 'videos', 'desktop', 'downloads'] as const).flatMap((n) => {
@@ -140,26 +82,38 @@ function safety(): SafetyContext {
       return [];
     }
   });
-  const usualNames = ['Documents', 'Images', 'Pictures', 'Musique', 'Music', 'Vidéos', 'Videos', 'Bureau', 'Desktop', 'Téléchargements', 'Downloads'];
   return {
+    platform: process.platform,
     home: home(),
     mounts: readMounts().map((m) => m.mount),
-    appDirs: [appRoot, app.getPath('userData')],
-    personal: [...new Set([...fromSystem, ...usualNames.map((n) => join(home(), n))])],
+    appDirs: [appRoot, unpacked, app.getPath('userData'), ...(app.isPackaged ? [process.resourcesPath, dirname(process.execPath)] : [])],
+    personal: [...new Set([...fromSystem, ...USUAL_NAMES.map((n) => join(home(), n))])],
+    env: process.env,
   };
 }
 
+/** Windows and macOS ignore letter case in names. */
+function sameOrInside(path: string, folder: string) {
+  const a = IS_WIN || IS_MAC ? path.toLowerCase() : path;
+  const b = IS_WIN || IS_MAC ? folder.toLowerCase() : folder;
+  return a === b || a.startsWith(b.endsWith(sep) ? b : b + sep);
+}
+
+const why = (key: Key | null) => (key ? tr(key) : undefined);
+
 // ----- Scanning -------------------------------------------------------------------
 let currentScan: number | null = null;
+
+const ENGINE_ERRORS: Record<string, Key> = { not_a_folder: 'err.notFolder', no_scan: 'err.read', unknown_folder: 'err.read' };
 
 async function scan(path: string): Promise<ScanResult> {
   let root = resolve(path);
   try {
     root = realpathSync(root);
   } catch {
-    throw new Error("Ce dossier n'existe pas.");
+    throw new Error(tr('err.noFolder'));
   }
-  if (/^\/(proc|sys|dev)(\/|$)/.test(root)) throw new Error('Ce dossier est virtuel : il ne prend aucune place sur le disque.');
+  if (process.platform === 'linux' && /^\/(proc|sys|dev)(\/|$)/.test(root)) throw new Error(tr('err.virtual'));
   if (currentScan !== null) await engine.cancel(currentScan);
   const res = await engine.request(
     'scan',
@@ -173,10 +127,10 @@ async function scan(path: string): Promise<ScanResult> {
   );
   currentScan = null;
   if (res.cancelled) throw new Error('cancelled');
-  if (!res.ok) throw new Error(res.error ?? "L'analyse a échoué.");
+  if (!res.ok) throw new Error(tr(ENGINE_ERRORS[res.error] ?? 'err.scanFailed'));
   const disks = await listDisks();
-  const disk = disks.find((d) => d.mount === root);
-  // /proc, /run and the like are skipped too, but only real disks are worth mentioning.
+  const disk = disks.find((d) => d.mount === root || (IS_WIN && d.mount.toLowerCase() === root.toLowerCase()));
+  // Virtual folders are skipped too, but only real disks are worth mentioning.
   const realMounts = new Set(disks.map((d) => d.mount));
   return {
     ...(res as unknown as ScanResult),
@@ -186,9 +140,17 @@ async function scan(path: string): Promise<ScanResult> {
   };
 }
 
-/** Only projects in the home folder are offered: anywhere else they likely belong to an installed program. */
+/**
+ * Only projects in the home folder are offered: anywhere else they likely belong to an installed
+ * program. The same goes for the folders where each system keeps applications' own files.
+ */
 function ownProjects(found: Artefact[] = []): Artefact[] {
-  return found.filter((a) => a.path.startsWith(`${home()}/`) && !a.path.startsWith(`${appRoot}/`));
+  const appData = IS_WIN ? [join(home(), 'AppData')] : IS_MAC ? [join(home(), 'Library')] : [];
+  return found.filter((a) => {
+    if (a.path === home() || !sameOrInside(a.path, home())) return false;
+    if (sameOrInside(a.path, appRoot)) return false;
+    return !appData.some((d) => sameOrInside(a.path, d));
+  });
 }
 
 // ----- Deleting -------------------------------------------------------------------
@@ -198,9 +160,15 @@ function checkItems(paths: string[]): ItemCheck[] {
   const ctx = safety();
   return paths.map((path) => ({
     path,
-    refused: refusal(path, ctx) ?? undefined,
-    warning: warning(path, ctx) ?? undefined,
+    refused: why(refusal(path, ctx)),
+    warning: why(warning(path, ctx)),
   }));
+}
+
+/** The engine names a reason ("denied", "in_use"…); the person reads a sentence. */
+function engineReason(code: unknown): string {
+  const known: Record<string, Key> = { denied: 'why.denied', in_use: 'why.inUse', other_disk: 'why.otherDisk', refused: 'why.refused', failed: 'why.failed' };
+  return typeof code === 'string' && known[code] ? tr(known[code]) : tr('err.resisted');
 }
 
 async function deleteItems(items: DeleteItem[], mode: DeleteMode): Promise<DeleteOutcome> {
@@ -208,8 +176,8 @@ async function deleteItems(items: DeleteItem[], mode: DeleteMode): Promise<Delet
   const outcome: DeleteOutcome = { mode, freed: 0, moved: 0, done: [], failed: [] };
   const allowed: DeleteItem[] = [];
   for (const item of items) {
-    const why = refusal(item.path, ctx);
-    if (why) outcome.failed.push({ path: item.path, reason: why });
+    const refused = refusal(item.path, ctx);
+    if (refused) outcome.failed.push({ path: item.path, reason: tr(refused) });
     else allowed.push(item);
   }
   const forget: DeleteItem[] = [];
@@ -221,7 +189,7 @@ async function deleteItems(items: DeleteItem[], mode: DeleteMode): Promise<Delet
         outcome.done.push(item.path);
         forget.push(item);
       } catch {
-        outcome.failed.push({ path: item.path, reason: "La corbeille n'est pas disponible ici. Essayez la suppression définitive." });
+        outcome.failed.push({ path: item.path, reason: tr('err.trash') });
       }
     }
   } else if (allowed.length) {
@@ -241,7 +209,7 @@ async function deleteItems(items: DeleteItem[], mode: DeleteMode): Promise<Delet
         outcome.done.push(r.path);
         forget.push(item);
       } else {
-        outcome.failed.push({ path: r.path, reason: r.error ?? res.messages?.[0] ?? 'Certains fichiers ont résisté (accès refusé).' });
+        outcome.failed.push({ path: r.path, reason: engineReason(r.error ?? res.messages?.[0]?.why) });
       }
     }
   }
@@ -277,7 +245,7 @@ function cleanTargets() {
 
 function runCommand(file: string, args: string[], timeout = 10 * 60_000): Promise<{ ok: boolean; out: string; err: string }> {
   return new Promise((done) => {
-    execFile(file, args, { timeout, maxBuffer: 16 * 1024 * 1024 }, (error, stdout, stderr) => {
+    execFile(file, args, { timeout, maxBuffer: 16 * 1024 * 1024, windowsHide: true }, (error, stdout, stderr) => {
       done({ ok: !error, out: String(stdout), err: String(stderr) });
     });
   });
@@ -290,24 +258,33 @@ function parseHuman(text: string): number {
   return m ? parseFloat(m[1]) * (UNIT[m[2].toUpperCase() || 'B'] ?? 1) : 0;
 }
 
+async function measurePaths(paths: string[]): Promise<number | null> {
+  if (!paths.length) return null;
+  let bytes = 0;
+  let any = false;
+  await engine.request('measure', { paths }, (ev) => {
+    if (ev.ev === 'measured') {
+      bytes += ev.bytes;
+      any = any || ev.exists;
+    }
+  });
+  return any ? bytes : null;
+}
+
 /** Size a system command would give back, or null when the system won't say. */
-async function measureCommand(id: string): Promise<number | null> {
-  if (id === 'apt') {
-    let bytes: number | null = null;
-    await engine.request('measure', { paths: ['/var/cache/apt/archives'] }, (ev) => {
-      if (ev.ev === 'measured') bytes = ev.bytes;
-    });
-    return bytes;
-  }
+async function measureCommand(r: Resolved): Promise<number | null> {
+  const id = r.def.id;
+  if (r.measure.length) return measurePaths(r.measure);
+  if (id === 'apt') return measurePaths(['/var/cache/apt/archives']);
   if (id === 'journal') {
-    const r = await runCommand('journalctl', ['--disk-usage'], 5000);
-    const m = /take up ([\d.]+\s*[KMGT]?)/.exec(r.out + r.err);
+    const res = await runCommand('journalctl', ['--disk-usage'], 5000);
+    const m = /take up ([\d.]+\s*[KMGT]?)/.exec(res.out + res.err);
     return m ? parseHuman(m[1]) : null;
   }
   if (id === 'docker') {
-    const r = await runCommand('docker', ['system', 'df', '--format', '{{.Type}}\t{{.Reclaimable}}'], 5000);
-    if (!r.ok) return null;
-    return r.out.split('\n').reduce((sum, line) => {
+    const res = await runCommand('docker', ['system', 'df', '--format', '{{.Type}}\t{{.Reclaimable}}'], 5000);
+    if (!res.ok) return null;
+    return res.out.split(/\r?\n/).reduce((sum, line) => {
       const [type, value] = line.split('\t');
       return type === 'Images' || type === 'Build Cache' ? sum + parseHuman(value ?? '') : sum;
     }, 0);
@@ -336,7 +313,7 @@ async function measureTargets(): Promise<TargetMeasure[]> {
     for (const p of all) owner.set(p, t.def.id);
   }
   const commands = targets.filter((t) => t.def.steps).map(async (t) => {
-    const bytes = await measureCommand(t.def.id);
+    const bytes = await measureCommand(t);
     report({ id: t.def.id, bytes: bytes ?? 0, files: null, unknown: bytes === null });
   });
   const paths = [...owner.keys()];
@@ -357,14 +334,8 @@ async function measureTargets(): Promise<TargetMeasure[]> {
 
 let cancelCleanRequested = false;
 
-async function diskFree(path: string) {
-  try {
-    const s = await statfs(path);
-    return s.bavail * s.bsize;
-  } catch {
-    return 0;
-  }
-}
+/** The disk a system command frees space on: the one holding the home folder. */
+const commandDisk = () => (IS_WIN ? parse(home()).root : '/');
 
 async function cleanRun(ids: string[]): Promise<CleanOutcome> {
   const started = Date.now();
@@ -380,28 +351,30 @@ async function cleanRun(ids: string[]): Promise<CleanOutcome> {
       break;
     }
     index += 1;
+    const label = labelOf(t.def);
     const notify = (freed: number) =>
-      emit('clean:progress', { targetId: t.def.id, label: t.def.label, freed: outcome.freed + freed, index, count: targets.length });
+      emit('clean:progress', { targetId: t.def.id, label, freed: outcome.freed + freed, index, count: targets.length });
     notify(0);
     const blocker = blockedBy(t.def, running);
     if (blocker) {
-      outcome.results.push({ id: t.def.id, label: t.def.label, freed: 0, note: `Ignoré : ${blocker} est ouvert.` });
+      outcome.results.push({ id: t.def.id, label, freed: 0, note: tr('note.skipped', { name: blocker }) });
       continue;
     }
     let freed = 0;
     let note: string | undefined;
     if (t.def.steps) {
-      const before = await diskFree('/');
+      const before = await diskFree(commandDisk());
       for (const step of t.def.steps) {
         const r = await runCommand(step.file, step.args);
         if (!r.ok) {
-          note = /dismissed|not authorized/i.test(r.err) ? 'Mot de passe refusé ou annulé.' : 'La commande a échoué.';
+          note = /dismissed|not authorized/i.test(r.err) ? tr('note.password') : tr('note.command');
           break;
         }
       }
-      freed = Math.max(0, (await diskFree('/')) - before);
+      freed = Math.max(0, (await diskFree(commandDisk())) - before);
     } else {
-      const safe = t.paths.filter((p) => !refusal(p, ctx));
+      // Folders are only emptied: the folder itself stays for the program that uses it.
+      const safe = t.paths.filter((p) => !refusal(p, ctx, true));
       const safeFiles = t.files.filter((p) => !refusal(p, ctx));
       const onEvent = (ev: Record<string, number | string>) => {
         if (ev.ev === 'deleting') notify(freed + Number(ev.freed));
@@ -421,10 +394,10 @@ async function cleanRun(ids: string[]): Promise<CleanOutcome> {
         errors += r.errors ?? 0;
       }
       currentDelete = null;
-      if (errors > 0) note = `${errors} élément${errors > 1 ? 's' : ''} n'ont pas pu être retirés.`;
+      if (errors > 0) note = tr('note.notRemoved', { n: errors });
     }
     outcome.freed += freed;
-    outcome.results.push({ id: t.def.id, label: t.def.label, freed, note });
+    outcome.results.push({ id: t.def.id, label, freed, note });
     notify(0);
   }
   outcome.ms = Date.now() - started;
@@ -443,17 +416,18 @@ async function findProjects(): Promise<Artefact[]> {
   return res.ok ? ownProjects(res.artefacts) : [];
 }
 
-// ----- Launcher -------------------------------------------------------------------
+// ----- Launcher (Linux: an entry in the applications menu) ------------------------
 const desktopFile = () => join(home(), '.local', 'share', 'applications', 'clairiere.desktop');
 
 function installLauncher() {
+  if (process.platform !== 'linux') return;
   const file = desktopFile();
   mkdirSync(dirname(file), { recursive: true });
   writeFileSync(file, [
     '[Desktop Entry]',
     'Type=Application',
     'Name=Clairière',
-    'Comment=Analyser les disques et libérer de la place',
+    `Comment=${tr('home.lead')}`,
     `Exec="${join(appRoot, 'clairiere')}"`,
     `Icon=${join(appRoot, 'dist', 'icon.svg')}`,
     'Terminal=false',
@@ -462,8 +436,26 @@ function installLauncher() {
   ].join('\n'));
 }
 
+function launcherInstalled() {
+  // Installed on Windows and macOS, the app always comes with its own shortcut.
+  // (app.isPackaged can't tell on Linux: the development copy runs under a renamed Electron too.)
+  if (process.platform !== 'linux') return true;
+  return basename(process.execPath) === 'clairiere' || existsSync(desktopFile());
+}
+
 // ----- Window ---------------------------------------------------------------------
 const handlers: Record<string, (...args: never[]) => unknown> = {
+  platform: () => process.platform,
+  getLanguage: () => settings.language ?? null,
+  setLanguage: (lang: string) => {
+    if (!isLang(lang)) return;
+    settings.language = lang;
+    setMainLang(lang);
+    saveSettings();
+  },
+  openDiskAccessSettings: async () => {
+    if (IS_MAC) await shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles');
+  },
   home: () => home(),
   disks: () => listDisks(),
   scan: (path: string) => scan(path),
@@ -472,11 +464,11 @@ const handlers: Record<string, (...args: never[]) => unknown> = {
   },
   view: async (node: number, options: ViewOptions) => {
     const res = await engine.request('view', { node, ...options });
-    if (!res.ok) throw new Error(res.error ?? 'Lecture impossible.');
+    if (!res.ok) throw new Error(tr(ENGINE_ERRORS[res.error] ?? 'err.read'));
     return res;
   },
   pickFolder: async () => {
-    const r = await dialog.showOpenDialog(win!, { properties: ['openDirectory'], title: 'Choisir un dossier', defaultPath: home() });
+    const r = await dialog.showOpenDialog(win!, { properties: ['openDirectory'], title: tr('dialog.pickFolder'), defaultPath: home() });
     return r.canceled ? null : r.filePaths[0];
   },
   checkItems: (paths: string[]) => checkItems(paths),
@@ -498,8 +490,8 @@ const handlers: Record<string, (...args: never[]) => unknown> = {
     if (currentDelete !== null) await engine.cancel(currentDelete);
   },
   addCustomTarget: (path: string) => {
-    const why = refusal(path, safety());
-    if (why) return why;
+    const refused = refusal(path, safety());
+    if (refused) return tr(refused);
     if (!settings.customs.some((c) => c.path === path)) {
       settings.customs.push({ id: `custom:${Date.now()}`, path });
       saveSettings();
@@ -525,12 +517,10 @@ const handlers: Record<string, (...args: never[]) => unknown> = {
     return cleanRun(ids);
   },
   findProjects: () => findProjects(),
-  // The installed package brings its own entry in the applications menu.
-  // (app.isPackaged can't tell: the development copy runs under a renamed Electron too.)
-  launcherInstalled: () => basename(process.execPath) === 'clairiere' || existsSync(desktopFile()),
+  launcherInstalled: () => launcherInstalled(),
   installLauncher: () => installLauncher(),
   openLink: async (url: string) => {
-    if (!ALLOWED_LINKS.includes(url)) throw new Error('Adresse non autorisée.');
+    if (!ALLOWED_LINKS.includes(url)) throw new Error(tr('err.link'));
     await shell.openExternal(url);
   },
 };
@@ -599,9 +589,11 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
-      // A picture must not depend on the window being visible: another window, a locked screen
-      // or a different workspace would otherwise stop the drawing.
+      // The picture must not depend on the window being visible, focused or on top: an offscreen
+      // window is never shown, so a check never steals focus or covers what the person is doing,
+      // on Windows, macOS and Linux alike, and it keeps drawing whatever happens on screen.
       offscreen: !!screenshotFile,
+      backgroundThrottling: !screenshotFile,
     },
   });
   win.setMenuBarVisibility(false);
@@ -625,6 +617,9 @@ if (!screenshotFile && !app.requestSingleInstanceLock()) {
   void app.whenReady().then(() => {
     loadSettings();
     createWindow();
+  });
+  app.on('activate', () => {
+    if (!win && app.isReady()) createWindow();
   });
   app.on('window-all-closed', () => app.quit());
   app.on('will-quit', () => engine.stop());

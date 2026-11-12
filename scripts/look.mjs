@@ -17,6 +17,10 @@ const app = await electron.launch({
 });
 const page = await app.firstWindow();
 await page.waitForSelector('.brand');
+// A fresh settings folder: the language is asked first. The steps below read French.
+await page.getByRole('radio', { name: 'Français' }).click();
+await page.getByRole('button', { name: 'Continuer' }).click();
+await page.waitForSelector('.lang-card', { state: 'detached' });
 const invoke = (name, ...args) => page.evaluate(([n, a]) => window.clairiere.invoke(n, ...a), [name, args]);
 
 async function timed(label, fn) {

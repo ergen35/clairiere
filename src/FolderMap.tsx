@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { TreeNode } from '../shared/types';
-import { formatBytes, formatPercent, plural } from './format';
+import { count, formatBytes, formatPercent } from './format';
+import { t, useLang } from './i18n';
 import { Arc, Cell, hitArc, hitCell, layoutRings, layoutTreemap } from './mapLayout';
 import { mapTheme, MapTheme, mix, slotColor, textOn } from './palette';
 
@@ -26,7 +27,7 @@ const MAX_BLOCK_DEPTH = 4;
 const MAX_RING_DEPTH = 4;
 
 function otherLabel(node: TreeNode) {
-  return node.kind === 'other' ? plural(node.count ?? 0, 'petit élément', 'petits éléments') : node.name;
+  return node.kind === 'other' ? count('count.smallItems', node.count ?? 0) : node.name;
 }
 
 function ellipsize(ctx: CanvasRenderingContext2D, text: string, max: number): string {
@@ -133,6 +134,7 @@ export function FolderMap({ mode, root, rootPath, highlightPath, onHover, onOpen
   const [themeTick, setThemeTick] = useState(0);
   const [tip, setTip] = useState<{ x: number; y: number; node: TreeNode } | null>(null);
   const hoverRef = useRef<string | null>(null);
+  const lang = useLang();
 
   useLayoutEffect(() => {
     const box = boxRef.current!;
@@ -197,7 +199,7 @@ export function FolderMap({ mode, root, rootPath, highlightPath, onHover, onOpen
       ctx.font = `600 ${ringGeom.center > 60 ? 16 : 13}px ${font}`;
       ctx.fillText(formatBytes(root.size), cx, cy);
     }
-  }, [mode, cells, arcs, size, cx, cy, ringGeom, root.size, prepare, themeTick]);
+  }, [mode, cells, arcs, size, cx, cy, ringGeom, root.size, prepare, themeTick, lang]);
 
   useEffect(() => {
     if (!overlayRef.current || size.w === 0) return;
@@ -244,7 +246,7 @@ export function FolderMap({ mode, root, rootPath, highlightPath, onHover, onOpen
       className={`map ${mode}`}
       ref={boxRef}
       role="img"
-      aria-label={`Carte du contenu de ${rootPath}, ${formatBytes(root.size)}. La liste à côté donne les mêmes informations.`}
+      aria-label={t('map.aria', { path: rootPath, size: formatBytes(root.size) })}
       onMouseMove={(e) => {
         const hit = locate(e);
         const key = hit ? `${hit.path}|${hit.node.kind}` : null;
@@ -288,7 +290,7 @@ export function FolderMap({ mode, root, rootPath, highlightPath, onHover, onOpen
           <span>
             {formatBytes(tip.node.size)} · {formatPercent(tip.node.size, tipTotal)}
           </span>
-          {tip.node.kind === 'dir' && tip.node.files !== undefined && <span>{plural(tip.node.files, 'fichier')}</span>}
+          {tip.node.kind === 'dir' && tip.node.files !== undefined && <span>{count('count.file', tip.node.files)}</span>}
         </div>
       )}
     </div>

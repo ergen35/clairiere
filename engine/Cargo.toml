@@ -1,6 +1,6 @@
 [package]
 name = "clairiere-engine"
-version = "0.2.0"
+version = "0.3.0"
 authors = ["Serge Eric Hotegni"]
 repository = "https://github.com/ergen35/clairiere"
 edition = "2021"

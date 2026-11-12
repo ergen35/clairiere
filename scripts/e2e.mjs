@@ -96,14 +96,25 @@ async function launch() {
   });
   const page = await app.firstWindow();
   await page.waitForSelector('.brand');
-  return { app, page };
+  await page.waitForTimeout(300);
+  const picker = (await page.locator('.lang-card').count()) > 0;
+  if (picker) {
+    // First start: the language is chosen before anything else. These checks read French.
+    await page.getByRole('radio', { name: 'Français' }).click();
+    await page.waitForSelector('#lang-title:text("Choisissez votre langue")');
+    await page.getByRole('button', { name: 'Continuer' }).click();
+    await page.waitForSelector('.lang-card', { state: 'detached' });
+    await page.waitForSelector('.nav:has-text("Disques")');
+  }
+  return { app, page, picker };
 }
 
 const invoke = (page, name, ...args) => page.evaluate(([n, a]) => window.clairiere.invoke(n, ...a), [name, args]);
 
 async function main() {
   fixtures();
-  let { app, page } = await launch();
+  let { app, page, picker } = await launch();
+  check('the language is asked at the very first start', picker);
   const errors = [];
   page.on('pageerror', (e) => errors.push(e.message));
   await page.setViewportSize?.({ width: 1280, height: 800 }).catch(() => {});
@@ -348,7 +359,8 @@ async function main() {
   file('.cache/thumbnails/nouveau.png', 1 * MB);
   file('.cache/pip/garde', 1 * MB);
   file('.local/share/Trash/files/encore.bin', 1 * MB);
-  ({ app, page } = await launch());
+  ({ app, page, picker } = await launch());
+  check('the language chosen is remembered', !picker && (await page.locator('.nav', { hasText: 'Disques' }).count()) === 1);
   await page.waitForTimeout(1500);
   check('clean on opening empties what is chosen', !existsSync(home('.cache/thumbnails/nouveau.png')));
   check('a choice is remembered between sessions', existsSync(home('.cache/pip/garde')));

@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 jobs:
-  build:
+  linux:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -32,12 +32,109 @@ jobs:
       - name: Build the app and the installable package
         run: npm run package
 
+      - name: Protection rules of every system
+        run: node scripts/safety-check.mjs
+
       # Runs on a throw-away home folder, with stand-ins for the system commands.
       - name: End-to-end checks
         run: xvfb-run -a npm run test:e2e
 
       - uses: actions/upload-artifact@v4
         with:
-          name: clairiere-deb
+          name: clairiere-linux-deb
           path: release/*.deb
+          if-no-files-found: error
+
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Build the app
+        run: npm run build
+
+      - name: Protection rules of every system
+        run: node scripts/safety-check.mjs
+
+      - name: The engine measures a real folder
+        shell: pwsh
+        run: .\engine-bin\clairiere-engine.exe --bench $env:USERPROFILE
+
+      - name: The window opens and draws
+        shell: pwsh
+        run: |
+          npx electron . --screenshot shots/windows.png
+          if (-not (Test-Path shots/windows.png)) { exit 1 }
+
+      - name: Make the installer
+        run: npx electron-builder --win nsis --x64 --publish never
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: clairiere-windows-installer
+          path: |
+            release/*.exe
+            shots/windows.png
+          if-no-files-found: error
+
+  macos:
+    strategy:
+      matrix:
+        include:
+          - arch: arm64
+            target: aarch64-apple-darwin
+          - arch: x64
+            target: x86_64-apple-darwin
+    runs-on: macos-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Rust for ${{ matrix.arch }} Macs
+        run: rustup target add ${{ matrix.target }}
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Build the app
+        run: npm run build
+        env:
+          CLAIRIERE_ENGINE_TARGET: ${{ matrix.target }}
+
+      - name: Protection rules of every system
+        run: node scripts/safety-check.mjs
+
+      - name: The engine measures a real folder
+        if: matrix.arch == 'arm64'
+        run: ./engine-bin/clairiere-engine --bench "$HOME"
+
+      - name: The window opens and draws
+        if: matrix.arch == 'arm64'
+        run: |
+          npx electron . --screenshot shots/macos.png
+          test -f shots/macos.png
+
+      - name: Make the disk image
+        run: npx electron-builder --mac dmg --${{ matrix.arch }} --publish never
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: clairiere-macos-${{ matrix.arch }}
+          path: |
+            release/*.dmg
+            shots/macos.png
           if-no-files-found: error

@@ -1,4 +1,8 @@
 #!/bin/sh
-# Starts Clairière from its folder.
+# Starts Clairière from its folder (Linux and macOS; on Windows: npx electron .).
+if [ "$(uname)" = "Darwin" ]; then
+  here="$(cd "$(dirname "$0")" && pwd)"
+  exec "$here/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron" "$here" "$@"
+fi
 here="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 exec "$here/node_modules/electron/dist/electron" "$here" "$@"

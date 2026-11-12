@@ -1,5 +1,6 @@
 import { ChildProcess, spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
+import { tr } from './i18n';
 
 // Messages come straight from the engine's JSON.
 type Json = Record<string, any>;
@@ -19,7 +20,7 @@ export class Engine {
 
   private ensure(): ChildProcess {
     if (this.proc) return this.proc;
-    const proc = spawn(this.binary, [], { stdio: ['pipe', 'pipe', 'inherit'] });
+    const proc = spawn(this.binary, [], { stdio: ['pipe', 'pipe', 'inherit'], windowsHide: true });
     this.proc = proc;
     createInterface({ input: proc.stdout! }).on('line', (line) => this.onLine(line));
     const fail = (why: string) => {
@@ -27,8 +28,8 @@ export class Engine {
       for (const p of this.pending.values()) p.reject(new Error(why));
       this.pending.clear();
     };
-    proc.on('error', (e) => fail(`Le moteur n'a pas pu démarrer : ${e.message}`));
-    proc.on('exit', () => fail("Le moteur s'est arrêté."));
+    proc.on('error', (e) => fail(tr('err.engineStart', { message: e.message })));
+    proc.on('exit', () => fail(tr('err.engineStopped')));
     return proc;
   }
 

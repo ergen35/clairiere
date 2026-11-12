@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { Artefact, ArtefactKind, DeleteItem, DeleteOutcome, ScanResult, TreeNode, ViewResult } from '../shared/types';
+import type { Artefact, ArtefactKind, DeleteItem, DeleteOutcome, Platform, ScanResult, TreeNode, ViewResult } from '../shared/types';
 import { api } from './api';
 import { FolderMap, MapHit, MapMode } from './FolderMap';
-import { baseName, formatAge, formatBytes, formatCount, formatDuration, formatPercent, joinPath, parentPath, plural, shortPath } from './format';
+import { baseName, count, formatAge, formatBytes, formatCount, formatDuration, formatPercent, isInside, joinPath, parentPath, shortPath } from './format';
+import { t, tn } from './i18n';
 import { mapTheme, slotColor } from './palette';
 import { Bar, ConfirmDelete, ContextMenu, Icon, MenuAction } from './ui';
 
@@ -18,18 +19,16 @@ interface Row {
   deletable: boolean;
 }
 
-export const ARTEFACT_LABEL: Record<ArtefactKind, string> = {
-  node: 'Dépendances Node',
-  rust: 'Compilation Rust',
-  python: 'Environnement Python',
-  web: 'Cache de site web',
-  gradle: 'Compilation Gradle',
-  tools: 'Outils de compilation',
-};
+export function artefactLabel(kind: ArtefactKind): string {
+  return t(`art.${kind}`);
+}
+
+const REVEAL = { linux: 'menu.revealLinux', darwin: 'menu.revealMac', win32: 'menu.revealWin' } as const;
 
 interface Props {
   result: ScanResult;
   home: string;
+  platform: Platform;
   onSummary(outcome: DeleteOutcome): void;
   onRescan(): void;
   onAddRegular(path: string): void;
@@ -38,7 +37,7 @@ interface Props {
 
 type Tab = 'folders' | 'files' | 'projects';
 
-export function Explorer({ result, home, onSummary, onRescan, onAddRegular, say }: Props) {
+export function Explorer({ result, home, platform, onSummary, onRescan, onAddRegular, say }: Props) {
   const [nodeId, setNodeId] = useState(0);
   const [list, setList] = useState<ViewResult | null>(null);
   const [mapData, setMapData] = useState<ViewResult | null>(null);
@@ -158,7 +157,7 @@ export function Explorer({ result, home, onSummary, onRescan, onAddRegular, say 
   // A folder and something inside it count once.
   const topSelected = useMemo(() => {
     const paths = [...selected.keys()];
-    return paths.filter((p) => !paths.some((q) => q !== p && p.startsWith(`${q}/`))).map((path) => ({ path, size: selected.get(path)! }));
+    return paths.filter((p) => !paths.some((q) => q !== p && isInside(p, q))).map((path) => ({ path, size: selected.get(path)! }));
   }, [selected]);
   const selectedTotal = topSelected.reduce((s, i) => s + i.size, 0);
 
@@ -167,30 +166,30 @@ export function Explorer({ result, home, onSummary, onRescan, onAddRegular, say 
     setSelected(new Map());
     onSummary(outcome);
     setVersion((v) => v + 1);
-    const count = outcome.done.length;
-    if (count) {
+    const done = outcome.done.length;
+    if (done) {
       say(outcome.mode === 'trash'
-        ? `${plural(count, 'élément déplacé', 'éléments déplacés')} à la corbeille (${formatBytes(outcome.moved)}, à vider pour récupérer la place).`
-        : `${formatBytes(outcome.freed)} libérés.`);
+        ? tn('toast.movedItems', done, { size: formatBytes(outcome.moved) })
+        : t('toast.freed', { size: formatBytes(outcome.freed) }));
     }
-    if (outcome.failed.length) say(`${baseName(outcome.failed[0].path)} : ${outcome.failed[0].reason}`);
+    if (outcome.failed.length) say(t('toast.failed', { name: baseName(outcome.failed[0].path), reason: outcome.failed[0].reason }));
   };
 
   const menuFor = (item: { path: string; size: number; isDir: boolean; node?: TreeNode; lossy?: boolean }, x: number, y: number) => {
     const actions: MenuAction[] = [];
     if (item.node?.kind === 'dir' && item.node.hasChildren) {
-      actions.push({ label: 'Entrer dans ce dossier', icon: 'map', run: () => open(item.node!) });
+      actions.push({ label: t('menu.enter'), icon: 'map', run: () => open(item.node!) });
     }
     actions.push(
-      { label: 'Ouvrir', icon: 'open', disabled: item.lossy, run: () => void api.open(item.path) },
-      { label: 'Montrer dans Fichiers', icon: 'folder', disabled: item.lossy, run: () => void api.reveal(item.path) },
-      { label: 'Copier le chemin', icon: 'file', run: () => void api.copyPath(item.path).then(() => say('Chemin copié.')) },
+      { label: t('menu.open'), icon: 'open', disabled: item.lossy, run: () => void api.open(item.path) },
+      { label: t(REVEAL[platform]), icon: 'folder', disabled: item.lossy, run: () => void api.reveal(item.path) },
+      { label: t('menu.copy'), icon: 'file', run: () => void api.copyPath(item.path).then(() => say(t('toast.copied'))) },
     );
     if (item.isDir) {
-      actions.push({ label: 'Ajouter à mes emplacements à vider', icon: 'clean', disabled: item.lossy, run: () => onAddRegular(item.path) });
+      actions.push({ label: t('menu.addRegular'), icon: 'clean', disabled: item.lossy, run: () => onAddRegular(item.path) });
     }
     actions.push({
-      label: 'Supprimer…', icon: 'trash', danger: true, disabled: item.lossy,
+      label: t('action.delete'), icon: 'trash', danger: true, disabled: item.lossy,
       run: () => setConfirm([{ path: item.path, size: item.size }]),
     });
     setMenu({ x, y, actions });
@@ -236,10 +235,10 @@ export function Explorer({ result, home, onSummary, onRescan, onAddRegular, say 
   return (
     <div className="page explorer">
       <header className="ex-head">
-        <button className="btn icon-only" aria-label="Dossier parent" title="Dossier parent" disabled={crumbs.length < 2} onClick={() => setNodeId(crumbs[crumbs.length - 2].id)}>
+        <button className="btn icon-only" aria-label={t('ex.parent')} title={t('ex.parent')} disabled={crumbs.length < 2} onClick={() => setNodeId(crumbs[crumbs.length - 2].id)}>
           <Icon name="up" />
         </button>
-        <nav className="crumbs" aria-label="Emplacement">
+        <nav className="crumbs" aria-label={t('ex.location')}>
           {crumbs.map((c, i) => (
             <span key={c.id}>
               {i > 0 && <i>/</i>}
@@ -250,57 +249,65 @@ export function Explorer({ result, home, onSummary, onRescan, onAddRegular, say 
           ))}
         </nav>
         <span className="spacer" />
-        <div className="segmented" role="group" aria-label="Forme de la carte">
-          <button className={mode === 'blocks' ? 'on' : ''} aria-pressed={mode === 'blocks'} onClick={() => setMode('blocks')}><Icon name="map" /> Rectangles</button>
-          <button className={mode === 'rings' ? 'on' : ''} aria-pressed={mode === 'rings'} onClick={() => setMode('rings')}><Icon name="rings" /> Anneaux</button>
+        <div className="segmented" role="group" aria-label={t('ex.mapShape')}>
+          <button className={mode === 'blocks' ? 'on' : ''} aria-pressed={mode === 'blocks'} onClick={() => setMode('blocks')}><Icon name="map" /> {t('ex.blocks')}</button>
+          <button className={mode === 'rings' ? 'on' : ''} aria-pressed={mode === 'rings'} onClick={() => setMode('rings')}><Icon name="rings" /> {t('ex.rings')}</button>
         </div>
-        <button className="btn" onClick={onRescan}><Icon name="refresh" /> Réanalyser</button>
+        <button className="btn" onClick={onRescan}><Icon name="refresh" /> {t('ex.rescan')}</button>
       </header>
 
       <div className="ex-summary">
         <strong className="num">{formatBytes(list?.node.size ?? result.bytes)}</strong>
-        {list && list.node.files !== undefined && <span>dans {plural(list.node.files, 'fichier')} et {plural(list.node.dirs ?? 0, 'dossier')}</span>}
-        <span className="muted">Analysé en {formatDuration(result.ms)}</span>
+        {list && list.node.files !== undefined && <span>{t('ex.contains', { files: count('count.file', list.node.files), dirs: count('count.folder', list.node.dirs ?? 0) })}</span>}
+        <span className="muted">{t('ex.analysedIn', { time: formatDuration(result.ms) })}</span>
         {notAnalysed > 0 && (
-          <span className="muted" title="Dossiers réservés au système ou inaccessibles avec votre compte.">
-            {formatBytes(notAnalysed)} du disque hors de portée
+          <span className="muted" title={t('ex.outOfReachTitle')}>
+            {t('ex.outOfReach', { size: formatBytes(notAnalysed) })}
           </span>
         )}
         {result.errors > 0 && (
           <span className="muted" title={result.denied.slice(0, 12).join('\n')}>
-            {plural(result.errors, 'dossier inaccessible', 'dossiers inaccessibles')}
+            {tn('ex.denied', result.errors)}
           </span>
         )}
         {result.skippedMounts.length > 0 && (
           <span className="muted" title={result.skippedMounts.join('\n')}>
-            {plural(result.skippedMounts.length, 'autre disque non compté', 'autres disques non comptés')}
+            {tn('ex.skipped', result.skippedMounts.length)}
           </span>
         )}
       </div>
 
+      {platform === 'darwin' && result.errors > 0 && (
+        <div className="ex-hint">
+          <Icon name="lock" size={14} />
+          <span>{t('ex.fda')}</span>
+          <button className="link" onClick={() => void api.openDiskAccessSettings()}>{t('ex.fdaOpen')}</button>
+        </div>
+      )}
+
       <div className="ex-body">
-        <section className="panel" aria-label="Contenu">
+        <section className="panel" aria-label={t('ex.content')}>
           <div className="tabs" role="tablist">
-            <button role="tab" aria-selected={tab === 'folders'} className={tab === 'folders' ? 'on' : ''} onClick={() => setTab('folders')}>Dossiers</button>
+            <button role="tab" aria-selected={tab === 'folders'} className={tab === 'folders' ? 'on' : ''} onClick={() => setTab('folders')}>{t('tab.folders')}</button>
             <button role="tab" aria-selected={tab === 'files'} className={tab === 'files' ? 'on' : ''} onClick={() => setTab('files')}>
-              Gros fichiers <small>{formatCount(result.topFiles.length)}</small>
+              {t('tab.files')} <small>{formatCount(result.topFiles.length)}</small>
             </button>
             <button role="tab" aria-selected={tab === 'projects'} className={tab === 'projects' ? 'on' : ''} onClick={() => setTab('projects')}>
-              Projets <small>{formatCount(result.artefacts.length)}</small>
+              {t('tab.projects')} <small>{formatCount(result.artefacts.length)}</small>
             </button>
           </div>
 
           {tab === 'folders' && (
             <>
               <div className="list-head">
-                <span>Nom</span><span>Part</span><span>Taille</span><span>Modifié</span>
+                <span>{t('col.name')}</span><span>{t('col.share')}</span><span>{t('col.size')}</span><span>{t('col.modified')}</span>
               </div>
               <div
                 className="list"
                 ref={listRef}
                 role="tree"
                 tabIndex={0}
-                aria-label="Contenu du dossier, du plus lourd au plus léger"
+                aria-label={t('list.aria')}
                 aria-activedescendant={rows[active] ? `row-${active}` : undefined}
                 onKeyDown={onKey}
                 onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)}
@@ -337,8 +344,8 @@ export function Explorer({ result, home, onSummary, onRescan, onAddRegular, say 
                           <input
                             type="checkbox"
                             tabIndex={-1}
-                            aria-label={`Choisir ${node.name}`}
-                            title={row.deletable ? 'Choisir pour supprimer' : node.kind === 'other' ? '' : "Nom de fichier illisible : passez par le gestionnaire de fichiers"}
+                            aria-label={t('row.pick', { name: node.name })}
+                            title={row.deletable ? t('row.pickTitle') : node.kind === 'other' ? '' : t('row.lossyTitle')}
                             checked={selected.has(row.path)}
                             disabled={!row.deletable}
                             onChange={() => toggleSelect(row.path, node.size)}
@@ -348,7 +355,7 @@ export function Explorer({ result, home, onSummary, onRescan, onAddRegular, say 
                             <button
                               className={`twist ${isOpen ? 'open' : ''}`}
                               tabIndex={-1}
-                              aria-label={isOpen ? 'Replier' : 'Déplier'}
+                              aria-label={isOpen ? t('row.collapse') : t('row.expand')}
                               onClick={(e) => {
                                 e.stopPropagation();
                                 toggle(node);
@@ -362,15 +369,15 @@ export function Explorer({ result, home, onSummary, onRescan, onAddRegular, say 
                           {row.level === 0 && <i className="swatch" style={{ background: slotColor(row.slot, theme) }} />}
                           <Icon name={node.kind === 'file' ? 'file' : node.kind === 'other' ? 'map' : 'folder'} size={15} />
                           {node.kind === 'dir' && node.hasChildren ? (
-                            <button className="row-label as-link" title={`Entrer dans ${node.name}`} onClick={(e) => {
+                            <button className="row-label as-link" title={t('row.enter', { name: node.name })} onClick={(e) => {
                               e.stopPropagation();
                               open(node);
                             }}>{node.name}</button>
                           ) : (
-                            <span className="row-label" title={node.name}>{node.kind === 'other' ? plural(node.count ?? 0, 'petit élément', 'petits éléments') : node.name}</span>
+                            <span className="row-label" title={node.name}>{node.kind === 'other' ? count('count.smallItems', node.count ?? 0) : node.name}</span>
                           )}
                           {node.denied && (
-                            <span className="row-lock" title="Accès refusé par le système : son contenu n'est pas compté" role="img" aria-label="Verrouillé">
+                            <span className="row-lock" title={t('row.deniedTitle')} role="img" aria-label={t('row.locked')}>
                               <Icon name="lock" size={13} />
                             </span>
                           )}
@@ -385,7 +392,7 @@ export function Explorer({ result, home, onSummary, onRescan, onAddRegular, say 
                     );
                   })}
                 </div>
-                {list && rows.length === 0 && <p className="empty">Ce dossier est vide.</p>}
+                {list && rows.length === 0 && <p className="empty">{t('ex.emptyFolder')}</p>}
               </div>
             </>
           )}
@@ -397,23 +404,23 @@ export function Explorer({ result, home, onSummary, onRescan, onAddRegular, say 
               selected={selected}
               onToggle={toggleSelect}
               onContext={(item, x, y) => menuFor({ path: item.path, size: item.size, isDir: false, lossy: item.lossy }, x, y)}
-              empty="Aucun fichier de plus de 1 Mo ici."
+              empty={t('files.none', { size: formatBytes(1e6) })}
             />
           )}
 
           {tab === 'projects' && (
             <FlatList
-              items={result.artefacts.map((a: Artefact) => ({ path: a.path, size: a.bytes, mtime: a.mtime, lossy: a.lossy, tag: ARTEFACT_LABEL[a.kind], title: baseName(parentPath(a.path)) }))}
+              items={result.artefacts.map((a: Artefact) => ({ path: a.path, size: a.bytes, mtime: a.mtime, lossy: a.lossy, tag: artefactLabel(a.kind), title: baseName(parentPath(a.path)) }))}
               home={home}
               selected={selected}
               onToggle={toggleSelect}
               onContext={(item, x, y) => menuFor({ path: item.path, size: item.size, isDir: true, lossy: item.lossy }, x, y)}
-              empty="Aucun dossier de compilation ou de dépendances trouvé ici."
+              empty={t('projects.noneHere')}
             />
           )}
         </section>
 
-        <section className="panel map-panel" aria-label="Carte">
+        <section className="panel map-panel" aria-label={t('ex.map')}>
           {mapData ? (
             <FolderMap
               mode={mode}
@@ -434,12 +441,12 @@ export function Explorer({ result, home, onSummary, onRescan, onAddRegular, say 
       {topSelected.length > 0 && (
         <footer className="tray">
           <span>
-            <strong>{plural(topSelected.length, 'élément choisi', 'éléments choisis')}</strong>{' '}
+            <strong>{tn('tray.picked', topSelected.length)}</strong>{' '}
             <span className="num">{formatBytes(selectedTotal)}</span>
           </span>
           <span className="spacer" />
-          <button className="btn ghost" onClick={() => setSelected(new Map())}>Tout désélectionner</button>
-          <button className="btn danger" onClick={() => setConfirm(topSelected)}><Icon name="trash" /> Supprimer…</button>
+          <button className="btn ghost" onClick={() => setSelected(new Map())}>{t('tray.clear')}</button>
+          <button className="btn danger" onClick={() => setConfirm(topSelected)}><Icon name="trash" /> {t('action.delete')}</button>
         </footer>
       )}
 
@@ -481,7 +488,7 @@ function FlatList({ items, home, selected, onToggle, onContext, empty }: {
         >
           <input
             type="checkbox"
-            aria-label={`Choisir ${baseName(item.path)}`}
+            aria-label={t('row.pick', { name: baseName(item.path) })}
             checked={selected.has(item.path)}
             disabled={item.lossy}
             onChange={() => onToggle(item.path, item.size)}

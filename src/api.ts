@@ -30,6 +30,10 @@ function desktopApi(bridge: Bridge): Api {
 
   return {
     isDemo: false,
+    platform: () => call('platform'),
+    getLanguage: () => call('getLanguage'),
+    setLanguage: (lang) => call('setLanguage', lang),
+    openDiskAccessSettings: () => call('openDiskAccessSettings'),
     home: () => call('home'),
     disks: () => call('disks'),
     scan: (path, onProgress: (p: ScanProgress) => void) => withListener('scan:progress', onProgress, () => call('scan', path)),

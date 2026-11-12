@@ -1,8 +1,12 @@
 # Historique des versions
 
-## À venir
+## 0.3.0
 
-- Intégration continue : compilation, essais et paquet `.deb` à chaque envoi sur GitHub.
+- Windows et macOS pris en charge : disques, tailles réelles (fichiers restés dans le cloud comptés à zéro sur Windows), suppression des fichiers en lecture seule, protections propres à chaque système.
+- Caches de chaque système : fichiers temporaires, cache Internet et rapports de plantage de Windows ; journaux, données Xcode, simulateurs et Homebrew sur macOS ; corbeille de chaque système.
+- Sept langues : anglais (par défaut), français, espagnol, allemand, chinois, coréen, russe. Choix au premier démarrage, changement depuis la barre latérale.
+- Installateurs Windows (.exe) et macOS (.dmg, Apple Silicon et Intel), non signés pour l'instant, fabriqués par l'intégration continue.
+- Intégration continue : compilation, essais et paquets à chaque envoi sur GitHub, sur Linux, Windows et macOS.
 
 ## 0.2.0
 
