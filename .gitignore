@@ -6,3 +6,4 @@ engine-bin
 shots
 release
 .impeccable
+package-lock.json
